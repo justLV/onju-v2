@@ -681,7 +681,7 @@ void gotTouch2() // center touch
 }
 
 void enterConfigMode() {
-    Serial.println("Entering configuration mode. Type 'exit' to save and restart.");
+    Serial.println("Entering configuration mode. Type 'exit' to save and restart, or 'cancel' to exit without saving.");
     Serial.println("Available commands: ssid, pass, server, timeout, volume");
 
     while (true) {
@@ -692,6 +692,10 @@ void enterConfigMode() {
             if (command == "exit") {
                 saveConfig();
                 Serial.println("Configuration saved. Restarting...");
+                delay(1000);
+                ESP.restart();
+            } else if (command == "cancel") {
+                Serial.println("Exiting without saving. Restarting...");
                 delay(1000);
                 ESP.restart();
             } else if (command.startsWith("ssid ")) {
