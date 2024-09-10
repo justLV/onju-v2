@@ -2,6 +2,7 @@
 #include <WiFiUdp.h>
 #include <driver/i2s.h>
 #include <Adafruit_NeoPixel.h>
+#include <Preferences.h>
 
 #if __has_include("git_hash.h") // optionally setup post-commit hook to generate git_hash.h
 #include "git_hash.h"
@@ -17,8 +18,13 @@
 
 #define TOUCH_EN
 // Wi-Fi settings - edit these in credentials.h
-const char *ssid = WIFI_SSID;
-const char *password = WIFI_PASSWORD;
+Preferences preferences;
+
+String wifi_ssid = WIFI_SSID;
+String wifi_password = WIFI_PASSWORD;
+String server_hostname = "default.server.com";
+int mic_timeout_default = 30000;
+uint8_t speaker_volume = 14;
 
 Adafruit_NeoPixel leds(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -62,8 +68,6 @@ int16_t convertedMicBuffer[SAMPLE_CHUNK_SIZE]; // For converted values to be sen
 #define MAX_ALLOWED_OFFSET 16000
 #define MIC_OFFSET_AVERAGING_FRAMES 1
 #define VAD_MIC_EXTEND 5000 // ensure there's always another 5s after last VAD detected by server to avoid cutting off while talking
-
-volatile uint8_t volume = 14; // crude speaker volume control by bitshifting received audio, also set in header. Works well for loudness perception
 
 bool mute = false; // track state of mute button
 
@@ -161,7 +165,9 @@ void setup()
     Serial.println("PSRAM disabled");
 #endif
 
-    WiFi.begin(ssid, password);
+    loadConfig();
+
+    WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
 
     Serial.print("Connecting to WiFi");
 
@@ -296,6 +302,9 @@ void loop()
             }
             leds.show();
             break;
+        case 'c':
+            enterConfigMode();
+            break;
         default:
             Serial.println("[UART] Unknown command: " + String(inChar));
             break;
@@ -337,14 +346,14 @@ void loop()
             leds.clear();
             leds.show();
             uint16_t timeout = header[1] << 8 | header[2];
-            volume = header[3];
+            speaker_volume = header[3];
             setLed(255, 255, 255, 0, header[4]); // header[4] sets fade rate. hardcoding to white but different voices could have different colors in future
 
-            Serial.println("Received audio with mic timeout of " + String(timeout) + " seconds and volume of " + String(volume));
+            Serial.println("Received audio with mic timeout of " + String(timeout) + " seconds and volume of " + String(speaker_volume));
 
-            if (volume > 20)
+            if (speaker_volume > 20)
             {
-                volume = 20;
+                speaker_volume = 20;
             }
 
             isPlaying = true;
@@ -374,7 +383,7 @@ void loop()
                     for (size_t i = 0; i < bytesRead; i += 2)
                     {
                         sample16 = (tcpBuffer[i + 1] << 8) | tcpBuffer[i];
-                        wavData[totalSamplesRead++] = (int32_t)sample16 << volume; // crude volume control
+                        wavData[totalSamplesRead++] = (int32_t)sample16 << speaker_volume; // crude volume control
                     }
                     // Start draining once we have a "good" reservoir
                     if (initialBufferFilled || totalSamplesRead >= bufferThreshold)
@@ -397,7 +406,7 @@ void loop()
                             {
                                 sum += abs(wavData[i]); // abs() is faster than squaring
                             }
-                            uint8_t sum_u8 = sum >> (volume + 8); // LEDs independent of volume
+                            uint8_t sum_u8 = sum >> (speaker_volume + 8); // LEDs independent of volume
 
                             if (sum_u8 > ledLevel)
                             { // should only ramp down naturally
@@ -663,4 +672,67 @@ void gotTouch2() // center touch
         mic_timeout = millis() + 30000;
         setLed(0, 255, 30, 255, 10);
     }
+}
+
+void enterConfigMode() {
+    Serial.println("Entering configuration mode. Type 'exit' to save and restart.");
+    Serial.println("Available commands: ssid, pass, server, timeout, volume");
+
+    while (true) {
+        if (Serial.available()) {
+            String command = Serial.readStringUntil('\n');
+            command.trim();
+
+            if (command == "exit") {
+                saveConfig();
+                Serial.println("Configuration saved. Restarting...");
+                delay(1000);
+                ESP.restart();
+            } else if (command.startsWith("ssid ")) {
+                wifi_ssid = command.substring(5);
+                Serial.println("SSID set to: " + wifi_ssid);
+            } else if (command.startsWith("pass ")) {
+                wifi_password = command.substring(5);
+                Serial.println("WiFi password updated");
+            } else if (command.startsWith("server ")) {
+                server_hostname = command.substring(7);
+                Serial.println("Server hostname set to: " + server_hostname);
+            } else if (command.startsWith("timeout ")) {
+                mic_timeout_default = command.substring(8).toInt();
+                Serial.println("Mic timeout set to: " + String(mic_timeout_default));
+            } else if (command.startsWith("volume ")) {
+                speaker_volume = command.substring(7).toInt();
+                if (speaker_volume > 20) speaker_volume = 20;
+                Serial.println("Speaker volume set to: " + String(speaker_volume));
+            } else {
+                Serial.println("Unknown command. Available commands: ssid, pass, server, timeout, volume");
+            }
+        }
+    }
+}
+
+void loadConfig() {
+    preferences.begin("onjuino-config", false);
+    wifi_ssid = preferences.getString("wifi_ssid", WIFI_SSID);
+    wifi_password = preferences.getString("wifi_pass", WIFI_PASSWORD);
+    server_hostname = preferences.getString("server", "default.server.com");
+    mic_timeout_default = preferences.getInt("mic_timeout", 30000);
+    speaker_volume = preferences.getUChar("volume", 14);
+    preferences.end();
+
+    Serial.println("Loaded configuration:");
+    Serial.println("SSID: " + wifi_ssid);
+    Serial.println("Server: " + server_hostname);
+    Serial.println("Mic Timeout: " + String(mic_timeout_default));
+    Serial.println("Volume: " + String(speaker_volume));
+}
+
+void saveConfig() {
+    preferences.begin("onjuino-config", false);
+    preferences.putString("wifi_ssid", wifi_ssid);
+    preferences.putString("wifi_pass", wifi_password);
+    preferences.putString("server", server_hostname);
+    preferences.putInt("mic_timeout", mic_timeout_default);
+    preferences.putUChar("volume", speaker_volume);
+    preferences.end();
 }
