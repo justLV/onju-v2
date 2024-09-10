@@ -20,11 +20,17 @@
 // Wi-Fi settings - edit these in credentials.h
 Preferences preferences;
 
-String wifi_ssid = WIFI_SSID;
-String wifi_password = WIFI_PASSWORD;
-String server_hostname = "default.server.com";
-int mic_timeout_default = 30000;
-uint8_t speaker_volume = 14;
+// Define default values
+#define DEFAULT_SERVER_HOSTNAME "default.server.com"
+#define DEFAULT_MIC_TIMEOUT 30000
+#define DEFAULT_SPEAKER_VOLUME 14
+
+// Configuration variables
+String wifi_ssid;
+String wifi_password;
+String server_hostname;
+int mic_timeout_default;
+uint8_t speaker_volume;
 
 Adafruit_NeoPixel leds(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -715,9 +721,9 @@ void loadConfig() {
     preferences.begin("onjuino-config", false);
     wifi_ssid = preferences.getString("wifi_ssid", WIFI_SSID);
     wifi_password = preferences.getString("wifi_pass", WIFI_PASSWORD);
-    server_hostname = preferences.getString("server", "default.server.com");
-    mic_timeout_default = preferences.getInt("mic_timeout", 30000);
-    speaker_volume = preferences.getUChar("volume", 14);
+    server_hostname = preferences.getString("server", DEFAULT_SERVER_HOSTNAME);
+    mic_timeout_default = preferences.getInt("mic_timeout", DEFAULT_MIC_TIMEOUT);
+    speaker_volume = preferences.getUChar("volume", DEFAULT_SPEAKER_VOLUME);
     preferences.end();
 
     Serial.println("Loaded configuration:");
