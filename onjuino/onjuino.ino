@@ -15,8 +15,11 @@
 
 #include "custom_boards.h"
 #include "credentials.h"
+#include "audio_compression.h"
 
 #define TOUCH_EN
+#define DISABLE_HARDWARE_MUTE  // Temporary: disable mute switch check
+
 // Wi-Fi settings - edit these in credentials.h
 Preferences preferences;
 
@@ -75,14 +78,19 @@ int16_t convertedMicBuffer[SAMPLE_CHUNK_SIZE]; // For converted values to be sen
 #define MIC_OFFSET_AVERAGING_FRAMES 1
 #define VAD_MIC_EXTEND 5000 // ensure there's always another 5s after last VAD detected by server to avoid cutting off while talking
 
+// Audio compression
+#define USE_COMPRESSION true        // Enable μ-law compression (2x bandwidth reduction)
+
 bool mute = false; // track state of mute button
+
+uint8_t compressedMicBuffer[SAMPLE_CHUNK_SIZE]; // For μ-law compressed audio
 
 i2s_config_t i2s_config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
     .sample_rate = 16000,
     .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
-    .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
-    .communication_format = I2S_COMM_FORMAT_I2S,
+    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
     .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
     .dma_buf_count = 4,
     .dma_buf_len = SAMPLE_CHUNK_SIZE}; // mostly set by needs of microphone
@@ -251,17 +259,18 @@ void setup()
 
 void loop()
 {
-#ifndef BOARD_V1
+#if !defined(BOARD_V1) && !defined(DISABLE_HARDWARE_MUTE)
     if (digitalRead(MUTE) && !mute)
     {
         mute = true;
         setLed(255, 50, 0, 255, 2); // slow fade red
+        mic_timeout = 0; // Turn off mic when muted
     }
     else if (!digitalRead(MUTE) && mute)
     {
         mute = false;
         setLed(0, 255, 50, 255, 10); // faster fade green
-        mic_timeout = millis() + 10000; // give 10 seconds to speak, will be extended by server if needed
+        mic_timeout = millis() + 60000; // 60s timeout when unmuted
     }
 #endif
 
@@ -272,13 +281,24 @@ void loop()
         {
         case 'r':
             Serial.println("[UART] Reset command from UART");
+            Serial.flush();
             delay(100);
-            esp_restart();
+            ESP.restart();
             break;
         case 'M':
             mic_timeout = millis() + (600 * 1000);
             Serial.println("[UART] Turned on mic for 10 min");
             break;
+        case 'A':
+        {
+            Serial.println("[UART] Sending multicast announcement");
+            udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);
+            String mcast_string = String(WiFi.getHostname()) + " " + String(GIT_HASH);
+            udp.write(reinterpret_cast<const uint8_t *>(mcast_string.c_str()), mcast_string.length());
+            udp.endPacket();
+            Serial.println("[UART] Multicast sent");
+            break;
+        }
         case 'm':
             mic_timeout = 0;
             Serial.println("[UART] Turned off mic");
@@ -558,16 +578,35 @@ void micTask(void *pvParameters)
             size_t bytesRead = 0;
             i2s_read(I2S_NUM, micBuffer, sizeof(micBuffer), &bytesRead, portMAX_DELAY);
 
+            // Convert to 16-bit and calculate DC offset
+            int32_t dc_sum = 0;
             for (int i = 0; i < sizeof(micBuffer) / sizeof(micBuffer[0]); i++)
             {
-                convertedMicBuffer[i] = static_cast<int16_t>(micBuffer[i] >> 14); // Convert to 16-bit. data precision is 18 bits. volume never saturates IRL
-                // TODO: use offset to remove DC bias
+                convertedMicBuffer[i] = static_cast<int16_t>(micBuffer[i] >> 14);
+                dc_sum += convertedMicBuffer[i];
             }
-            // TODO: do visualizations here instead of from TCP using offset(?)
+            int16_t dc_offset = dc_sum / SAMPLE_CHUNK_SIZE;
 
+            // Remove DC offset from all samples
+            for (int i = 0; i < SAMPLE_CHUNK_SIZE; i++)
+            {
+                convertedMicBuffer[i] -= dc_offset;
+            }
+
+            // Transmit audio
             counter++;
             udp.beginPacket(serverIP, udpPort);
-            udp.write((uint8_t *)convertedMicBuffer, sizeof(convertedMicBuffer));
+
+            if (USE_COMPRESSION)
+            {
+                encode_ulaw(convertedMicBuffer, compressedMicBuffer, SAMPLE_CHUNK_SIZE);
+                udp.write(compressedMicBuffer, SAMPLE_CHUNK_SIZE); // 480 bytes instead of 960
+            }
+            else
+            {
+                udp.write((uint8_t *)convertedMicBuffer, sizeof(convertedMicBuffer));
+            }
+
             udp.endPacket();
             currentState = true;
         }
