@@ -1,7 +1,19 @@
 #!/bin/bash
 # Flash firmware to ESP32
 
-PORT=${1:-/dev/cu.usbmodem1101}
+# Auto-detect USB port if not specified
+if [ -z "$1" ]; then
+    PORT=$(ls /dev/cu.usbmodem* 2>/dev/null | head -n 1)
+    if [ -z "$PORT" ]; then
+        echo "Error: No USB serial port found (looking for /dev/cu.usbmodem*)"
+        echo "Usage: flash_firmware.sh [port] [compile]"
+        exit 1
+    fi
+    echo "Auto-detected port: $PORT"
+else
+    PORT=$1
+fi
+
 COMPILE=${2:-no}
 
 echo "Flashing firmware to $PORT..."

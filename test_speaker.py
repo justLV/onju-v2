@@ -7,7 +7,8 @@ import socket
 import time
 from pydub import AudioSegment
 
-ESP32_IP = "192.168.68.97"
+import sys
+ESP32_IP = sys.argv[1] if len(sys.argv) > 1 else "192.168.68.97"
 ESP32_PORT = 3001
 WAV_FILE = "recording.wav"  # Use our test recording
 

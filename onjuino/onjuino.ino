@@ -3,6 +3,7 @@
 #include <driver/i2s.h>
 #include <Adafruit_NeoPixel.h>
 #include <Preferences.h>
+#include <opus.h>
 
 #if __has_include("git_hash.h") // optionally setup post-commit hook to generate git_hash.h
 #include "git_hash.h"
@@ -84,6 +85,17 @@ int16_t convertedMicBuffer[SAMPLE_CHUNK_SIZE]; // For converted values to be sen
 bool mute = false; // track state of mute button
 
 uint8_t compressedMicBuffer[SAMPLE_CHUNK_SIZE]; // For μ-law compressed audio
+
+// Opus decoder
+OpusDecoder *opus_decoder = NULL;
+const int OPUS_FRAME_SIZE = 320;  // 20ms @ 16kHz
+const int OPUS_MAX_PACKET = 4000; // Max Opus packet size
+int16_t opus_pcm_buffer[OPUS_FRAME_SIZE];
+uint8_t opus_packet_buffer[OPUS_MAX_PACKET]; // Global buffer to avoid stack overflow
+
+// Global client pointer for opus task
+WiFiClient *opusClient = NULL;
+volatile bool opusTaskRunning = false;
 
 i2s_config_t i2s_config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
@@ -253,6 +265,18 @@ void setup()
     wavData = (int32_t *)malloc((bufferThreshold * 4));
 #endif
 
+    // Initialize Opus decoder
+    int opus_error;
+    opus_decoder = opus_decoder_create(16000, 1, &opus_error);  // 16kHz, mono
+    if (opus_error != OPUS_OK)
+    {
+        Serial.printf("Opus decoder create failed: %d\n", opus_error);
+    }
+    else
+    {
+        Serial.println("Opus decoder initialized");
+    }
+
     xTaskCreatePinnedToCore(micTask, "MicTask", 4096, NULL, 1, NULL, 1);
     xTaskCreatePinnedToCore(updateLedTask, "updateLedTask", 2048, NULL, 2, NULL, 1);
 }
@@ -365,7 +389,7 @@ void loop()
         header[1:2] mic timeout in seconds (after audio is done playing)
         header[3]   volume
         header[4]   fade rate of LED's VAD visualization
-        header[5]   not used
+        header[5]   compression type: 0=PCM (raw), 1=μ-law, 2=Opus
         */
         if (header[0] == 0xAA)
         {
@@ -373,9 +397,11 @@ void loop()
             leds.show();
             uint16_t timeout = header[1] << 8 | header[2];
             speaker_volume = header[3];
+            uint8_t compression_type = header[5];
             setLed(255, 255, 255, 0, header[4]); // header[4] sets fade rate. hardcoding to white but different voices could have different colors in future
 
-            Serial.println("Received audio with mic timeout of " + String(timeout) + " seconds and volume of " + String(speaker_volume));
+            Serial.printf("Received audio (compression=%d) with mic timeout %d seconds, volume %d\n",
+                         compression_type, timeout, speaker_volume);
 
             if (speaker_volume > 20)
             {
@@ -392,25 +418,54 @@ void loop()
             int16_t sample16;
             uint32_t sum = 0; // for calculating average for LEDs
 
-            while (client.connected())
+            // Handle Opus compressed audio
+            if (compression_type == 2 && opus_decoder != NULL)
             {
-                bytesAvailable = client.available();
+                Serial.println("Starting Opus decode task with 32KB stack");
+                opusClient = &client;
+                opusTaskRunning = true;
 
-                if (bytesAvailable >= 2)
+                // Create dedicated task with large stack for Opus decoding
+                xTaskCreatePinnedToCore(
+                    opusDecodeTask,
+                    "OpusDecodeTask",
+                    32768,  // 32KB stack for Opus decoder
+                    NULL,
+                    1,
+                    NULL,
+                    1
+                );
+
+                // Wait for task to finish
+                while (opusTaskRunning)
                 {
-                    bytesToRead = (bytesAvailable / 2) * 2; // ensure whole samples only
-                    if (bytesToRead > tcpBufferSize)
-                    {
-                        bytesToRead = tcpBufferSize;
-                    }
+                    delay(100);
+                }
 
-                    bytesRead = client.read(tcpBuffer, bytesToRead);
+                Serial.println("Opus decode task completed");
+            }
+            // Handle PCM audio (compression_type == 0)
+            else
+            {
+                while (client.connected())
+                {
+                    bytesAvailable = client.available();
 
-                    for (size_t i = 0; i < bytesRead; i += 2)
+                    if (bytesAvailable >= 2)
                     {
-                        sample16 = (tcpBuffer[i + 1] << 8) | tcpBuffer[i];
-                        wavData[totalSamplesRead++] = (int32_t)sample16 << speaker_volume; // crude volume control
-                    }
+                        bytesToRead = (bytesAvailable / 2) * 2; // ensure whole samples only
+                        if (bytesToRead > tcpBufferSize)
+                        {
+                            bytesToRead = tcpBufferSize;
+                        }
+
+                        bytesRead = client.read(tcpBuffer, bytesToRead);
+
+                        for (size_t i = 0; i < bytesRead; i += 2)
+                        {
+                            sample16 = (tcpBuffer[i + 1] << 8) | tcpBuffer[i];
+                            wavData[totalSamplesRead++] = (int32_t)sample16 << speaker_volume; // crude volume control
+                        }
                     // Start draining once we have a "good" reservoir
                     if (initialBufferFilled || totalSamplesRead >= bufferThreshold)
                     {
@@ -444,11 +499,12 @@ void loop()
                         totalSamplesRead = 0;
                     }
                 }
-                else
-                {
-                    delay(2); // Allow for some bytes to be ready before reading again
+                    else
+                    {
+                        delay(2); // Allow for some bytes to be ready before reading again
+                    }
                 }
-            }
+            } // end else (PCM handling)
 
             // Hack to fill buffers with silence and block till all real audio is flushed out
             uint32_t silenceBuffer[240];
@@ -527,6 +583,113 @@ void loop()
         }
     }
     delay(10);
+}
+
+void opusDecodeTask(void *pvParameters)
+{
+    Serial.println("Opus decode task started");
+
+    WiFiClient *client = opusClient;
+    if (!client || !client->connected() || opus_decoder == NULL)
+    {
+        Serial.println("ERROR: Invalid client or decoder in opus task");
+        opusTaskRunning = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    bool initialBufferFilled = false;
+    size_t totalSamplesRead = 0;
+    uint32_t tic = millis();
+    uint32_t sum = 0;
+
+    while (client->connected())
+    {
+        // Read 2-byte frame length
+        if (client->available() < 2)
+        {
+            delay(1);
+            continue;
+        }
+
+        uint8_t len_bytes[2];
+        client->read(len_bytes, 2);
+        uint16_t frame_len = (len_bytes[0] << 8) | len_bytes[1];
+
+        // Sanity check
+        if (frame_len == 0 || frame_len > OPUS_MAX_PACKET)
+        {
+            Serial.printf("Invalid Opus frame length: %d\n", frame_len);
+            break;
+        }
+
+        // Read Opus frame
+        size_t bytes_read = 0;
+        while (bytes_read < frame_len && client->connected())
+        {
+            int avail = client->available();
+            if (avail > 0)
+            {
+                int to_read = min(avail, (int)(frame_len - bytes_read));
+                bytes_read += client->read(opus_packet_buffer + bytes_read, to_read);
+            }
+            else
+            {
+                delay(1);
+            }
+        }
+
+        // Decode Opus frame
+        int num_samples = opus_decode(opus_decoder, opus_packet_buffer, frame_len,
+                                      opus_pcm_buffer, OPUS_FRAME_SIZE, 0);
+
+        if (num_samples < 0)
+        {
+            Serial.printf("Opus decode error: %d\n", num_samples);
+            continue;
+        }
+
+        // Convert to 32-bit and apply volume
+        for (int i = 0; i < num_samples; i++)
+        {
+            wavData[totalSamplesRead++] = (int32_t)opus_pcm_buffer[i] << speaker_volume;
+        }
+
+        // Start draining once we have reservoir
+        if (initialBufferFilled || totalSamplesRead >= bufferThreshold)
+        {
+            if (!initialBufferFilled)
+            {
+                Serial.println("Initial buffer filled. totalSamplesRead: " + String(totalSamplesRead));
+                initialBufferFilled = true;
+            }
+
+            size_t bytesToWrite = totalSamplesRead * 4; // int32_t
+            size_t bytesWritten = 0;
+            i2s_write(I2S_NUM, (uint8_t *)wavData, bytesToWrite, &bytesWritten, portMAX_DELAY);
+
+            if (millis() - tic > 30)
+            {
+                tic = millis();
+                for (int i = 0; i < 128; i += 4)
+                {
+                    sum += abs(wavData[i]);
+                }
+                uint8_t sum_u8 = sum >> (speaker_volume + 8);
+
+                if (sum_u8 > ledLevel)
+                {
+                    ledLevel = sum_u8;
+                }
+                sum = 0;
+            }
+            totalSamplesRead = 0;
+        }
+    }
+
+    Serial.println("Opus decode task finished");
+    opusTaskRunning = false;
+    vTaskDelete(NULL);
 }
 
 void micTask(void *pvParameters)

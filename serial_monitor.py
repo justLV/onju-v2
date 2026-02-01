@@ -12,6 +12,15 @@ import time
 import select
 import termios
 import tty
+import glob
+
+def find_usb_port():
+    """Auto-detect USB serial port"""
+    # Look for ESP32 USB ports
+    ports = glob.glob('/dev/cu.usbmodem*')
+    if ports:
+        return sorted(ports)[0]  # Return first match
+    return None
 
 def connect_serial(port, baud=115200, timeout=1):
     """Attempt to connect to serial port"""
@@ -20,10 +29,20 @@ def connect_serial(port, baud=115200, timeout=1):
         time.sleep(0.1)
         return ser
     except Exception as e:
+        print(f" Error: {e}", flush=True)
         return None
 
 def main():
-    port = sys.argv[1] if len(sys.argv) > 1 else '/dev/cu.usbmodem1101'
+    # Auto-detect port if not specified
+    if len(sys.argv) > 1:
+        port = sys.argv[1]
+    else:
+        port = find_usb_port()
+        if not port:
+            print("Error: No USB serial port found (looking for /dev/cu.usbmodem*)")
+            print("Usage: serial_monitor.py [port]")
+            sys.exit(1)
+
     baud = 115200
 
     print(f"Serial Monitor - {port} @ {baud} baud")
@@ -33,8 +52,12 @@ def main():
     # Set terminal to raw mode for immediate key input
     old_settings = None
     if sys.platform != 'win32':
-        old_settings = termios.tcgetattr(sys.stdin)
-        tty.setcbreak(sys.stdin.fileno())
+        try:
+            old_settings = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
+        except Exception as e:
+            print(f"Warning: Could not set terminal to raw mode: {e}")
+            print("Continuing without raw mode (press Enter after each command)")
 
     ser = None
 
