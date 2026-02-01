@@ -96,6 +96,7 @@ uint8_t opus_packet_buffer[OPUS_MAX_PACKET]; // Global buffer to avoid stack ove
 // Global client pointer for opus task
 WiFiClient *opusClient = NULL;
 volatile bool opusTaskRunning = false;
+volatile bool interruptPlayback = false; // Flag to interrupt audio playback
 
 i2s_config_t i2s_config = {
     .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
@@ -417,6 +418,7 @@ void loop()
             size_t bytesAvailable, bytesToRead, bytesRead, bytesWritten, bytesToWrite;
             int16_t sample16;
             uint32_t sum = 0; // for calculating average for LEDs
+            bool wasInterrupted = false; // Track if playback was interrupted
 
             // Handle Opus compressed audio
             if (compression_type == 2 && opus_decoder != NULL)
@@ -424,6 +426,7 @@ void loop()
                 Serial.println("Starting Opus decode task with 32KB stack");
                 opusClient = &client;
                 opusTaskRunning = true;
+                interruptPlayback = false; // Clear interrupt flag
 
                 // Create dedicated task with large stack for Opus decoding
                 xTaskCreatePinnedToCore(
@@ -436,19 +439,80 @@ void loop()
                     1
                 );
 
-                // Wait for task to finish
+                // Wait for task to finish or interrupt
                 while (opusTaskRunning)
                 {
                     delay(100);
                 }
 
-                Serial.println("Opus decode task completed");
+                // Remember if we were interrupted (before clearing flag)
+                wasInterrupted = interruptPlayback;
+
+                // If interrupted, drain remaining TCP data without playing
+                if (interruptPlayback)
+                {
+                    Serial.println("Draining TCP buffer after interrupt...");
+
+                    // Clear I2S DMA buffer to stop audio immediately
+                    i2s_zero_dma_buffer(I2S_NUM);
+
+                    // Drain TCP for up to 1 second
+                    uint32_t drainStart = millis();
+                    while (client.connected() && (millis() - drainStart) < 1000)
+                    {
+                        if (client.available() >= 2)
+                        {
+                            // Read frame length
+                            uint8_t len_bytes[2];
+                            client.read(len_bytes, 2);
+                            uint16_t frame_len = (len_bytes[0] << 8) | len_bytes[1];
+
+                            if (frame_len > 0 && frame_len <= OPUS_MAX_PACKET)
+                            {
+                                // Read and discard frame data
+                                size_t bytes_discarded = 0;
+                                while (bytes_discarded < frame_len && client.available() > 0)
+                                {
+                                    uint8_t dummy[256];
+                                    int to_read = min((int)(frame_len - bytes_discarded), 256);
+                                    int read_count = client.read(dummy, to_read);
+                                    if (read_count > 0)
+                                    {
+                                        bytes_discarded += read_count;
+                                    }
+                                    else
+                                    {
+                                        delay(1);
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            delay(10);
+                        }
+                    }
+
+                    Serial.println("TCP drain complete");
+                    interruptPlayback = false; // Clear flag
+                }
+                else
+                {
+                    Serial.println("Opus decode task completed normally");
+                }
             }
             // Handle PCM audio (compression_type == 0)
             else
             {
                 while (client.connected())
                 {
+                    // Check for user interrupt
+                    if (interruptPlayback)
+                    {
+                        Serial.println("PCM playback interrupted by user");
+                        break;
+                    }
+
                     bytesAvailable = client.available();
 
                     if (bytesAvailable >= 2)
@@ -504,15 +568,50 @@ void loop()
                         delay(2); // Allow for some bytes to be ready before reading again
                     }
                 }
+
+                // Remember if we were interrupted (before clearing flag)
+                wasInterrupted = interruptPlayback;
+
+                // If interrupted, drain remaining TCP data without playing
+                if (interruptPlayback)
+                {
+                    Serial.println("Draining PCM TCP buffer after interrupt...");
+
+                    // Clear I2S DMA buffer to stop audio immediately
+                    i2s_zero_dma_buffer(I2S_NUM);
+
+                    // Drain TCP for up to 1 second
+                    uint32_t drainStart = millis();
+                    while (client.connected() && (millis() - drainStart) < 1000)
+                    {
+                        if (client.available() > 0)
+                        {
+                            uint8_t dummy[512];
+                            int available = min(client.available(), 512);
+                            client.read(dummy, available);
+                        }
+                        else
+                        {
+                            delay(10);
+                        }
+                    }
+
+                    Serial.println("PCM TCP drain complete");
+                    interruptPlayback = false; // Clear flag
+                }
             } // end else (PCM handling)
 
-            // Hack to fill buffers with silence and block till all real audio is flushed out
-            uint32_t silenceBuffer[240];
-            memset(silenceBuffer, 0, sizeof(silenceBuffer));
-            for (int i = 0; i < 8; i++)
+            // Only flush silence if not interrupted
+            if (!wasInterrupted)
             {
-                size_t bytesWritten = 0;
-                i2s_write(I2S_NUM, silenceBuffer, sizeof(silenceBuffer), &bytesWritten, portMAX_DELAY);
+                // Hack to fill buffers with silence and block till all real audio is flushed out
+                uint32_t silenceBuffer[240];
+                memset(silenceBuffer, 0, sizeof(silenceBuffer));
+                for (int i = 0; i < 8; i++)
+                {
+                    size_t bytesWritten = 0;
+                    i2s_write(I2S_NUM, silenceBuffer, sizeof(silenceBuffer), &bytesWritten, portMAX_DELAY);
+                }
             }
 
             isPlaying = false;
@@ -605,6 +704,12 @@ void opusDecodeTask(void *pvParameters)
 
     while (client->connected())
     {
+        // Check for user interrupt
+        if (interruptPlayback)
+        {
+            Serial.println("Playback interrupted by user");
+            break;
+        }
         // Read 2-byte frame length
         if (client->available() < 2)
         {
@@ -872,7 +977,16 @@ void gotTouch2() // center touch
     }
     else if (isPlaying)
     {
-        ; // TODO: interrupt assistant
+        // Interrupt assistant playback
+        Serial.println("Interrupting playback...");
+        interruptPlayback = true;
+        isPlaying = false; // Mark as not playing immediately
+
+        // Enable microphone immediately (30s to speak)
+        mic_timeout = millis() + 30000;
+
+        // Visual feedback: green = listening
+        setLed(0, 255, 30, 255, 10);
     }
     else if (mic_timeout < (millis() + 30000))
     {
