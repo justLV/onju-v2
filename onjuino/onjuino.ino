@@ -622,9 +622,11 @@ void loop()
 
             isPlaying = false;
 
-            mic_timeout = millis() + timeout * 1000;
+            // Enforce minimum 60s timeout after playback
+            uint32_t timeout_ms = max(timeout * 1000, 60000);
+            mic_timeout = millis() + timeout_ms;
             Serial.println("Done loading audio in buffers in " + String(millis() - tic) + "ms");
-            Serial.println("Set mic_timeout to " + String(mic_timeout));
+            Serial.println("Set mic_timeout to " + String(mic_timeout) + " (" + String(timeout_ms/1000) + "s)");
         }
         /*
         header[0]   0xBB for set LED command
@@ -1017,16 +1019,16 @@ void gotTouch2() // center touch
         interruptPlayback = true;
         isPlaying = false; // Mark as not playing immediately
 
-        // Enable microphone immediately (30s to speak)
-        mic_timeout = millis() + 30000;
+        // Enable microphone immediately (60s to speak)
+        mic_timeout = millis() + 60000;
 
         // Visual feedback: green = listening
         setLed(0, 255, 30, 255, 10);
     }
-    else if (mic_timeout < (millis() + 30000))
+    else if (mic_timeout < (millis() + 60000))
     {
-        // give 30 seconds to speak
-        mic_timeout = millis() + 30000;
+        // give 60 seconds to speak
+        mic_timeout = millis() + 60000;
         setLed(0, 255, 30, 255, 10);
     }
 }
