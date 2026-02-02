@@ -54,6 +54,12 @@ volatile uint16_t ledLevel = 0;
 volatile uint8_t ledColor[3] = {0, 0, 0};
 volatile uint8_t ledFade = 5;
 
+// Touch debounce timing
+volatile unsigned long lastTouchTimeLeft = 0;
+volatile unsigned long lastTouchTimeCenter = 0;
+volatile unsigned long lastTouchTimeRight = 0;
+const unsigned long TOUCH_DEBOUNCE_MS = 800; // 800ms between valid touches
+
 const double gammaValue = 1.8; // dropped this down from typical 2.2 to avoid flicker
 uint8_t gammaCorrectionTable[256];
 
@@ -960,17 +966,46 @@ void setLed(uint8_t r, uint8_t g, uint8_t b, uint8_t level, uint8_t fade)
 // volume currently implemented as header from server
 void gotTouch1()
 {
+    unsigned long currentTime = millis();
+
+    // Debounce: ignore touches that occur too quickly after the last one
+    if (currentTime - lastTouchTimeLeft < TOUCH_DEBOUNCE_MS)
+    {
+        return;
+    }
+
+    lastTouchTimeLeft = currentTime;
     Serial.println("Touch left [not implemented]");
 }
 
 void gotTouch3()
 {
+    unsigned long currentTime = millis();
+
+    // Debounce: ignore touches that occur too quickly after the last one
+    if (currentTime - lastTouchTimeRight < TOUCH_DEBOUNCE_MS)
+    {
+        return;
+    }
+
+    lastTouchTimeRight = currentTime;
     Serial.println("Touch right [not implemented]");
 }
 
 void gotTouch2() // center touch
 {
+    unsigned long currentTime = millis();
+
+    // Debounce: ignore touches that occur too quickly after the last one
+    if (currentTime - lastTouchTimeCenter < TOUCH_DEBOUNCE_MS)
+    {
+        // Touch ignored due to debounce
+        return;
+    }
+
+    lastTouchTimeCenter = currentTime;
     Serial.println("Center touch");
+
     if (mute || serverIP == IPAddress(0, 0, 0, 0))
     {
         setLed(255, 30, 0, 255, 10); // cannot listen
