@@ -1,12 +1,26 @@
 #!/bin/bash
 # Flash firmware to ESP32
 
+# Check for compile-only mode
+if [ "$1" = "compile" ] || [ "$1" = "compile-only" ]; then
+    echo "Compile-only mode (no upload)"
+    cd "$(dirname "$0")/onjuino"
+    echo "Compiling..."
+    arduino-cli compile --fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc,PSRAM=opi,UploadSpeed=115200 onjuino.ino || exit 1
+    echo ""
+    echo "✓ Compilation successful!"
+    exit 0
+fi
+
 # Auto-detect USB port if not specified
 if [ -z "$1" ]; then
     PORT=$(ls /dev/cu.usbmodem* 2>/dev/null | head -n 1)
     if [ -z "$PORT" ]; then
         echo "Error: No USB serial port found (looking for /dev/cu.usbmodem*)"
-        echo "Usage: flash_firmware.sh [port] [compile]"
+        echo "Usage: flash_firmware.sh [port|compile] [compile]"
+        echo "  flash_firmware.sh                    # Auto-detect port and upload"
+        echo "  flash_firmware.sh /dev/cu.usbmodem1  # Upload to specific port"
+        echo "  flash_firmware.sh compile            # Compile only, no upload"
         exit 1
     fi
     echo "Auto-detected port: $PORT"
