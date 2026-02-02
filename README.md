@@ -104,6 +104,23 @@ Irrespective of what you use for development, the quickest & least error prone s
 * Build and upload
 * If not reset, press the reset button. In Serial Monitor you can also send `r` to reset the device (assuming it is already booted)
 
+### Using flash_firmware.sh
+
+For command-line compilation and flashing, use the `flash_firmware.sh` script:
+
+```bash
+# Compile only (verify code compiles without ESP32 connected)
+./flash_firmware.sh compile
+
+# Auto-detect ESP32 and flash
+./flash_firmware.sh
+
+# Flash to specific port
+./flash_firmware.sh /dev/cu.usbmodem1234
+```
+
+**Note:** Always run `./flash_firmware.sh compile` after making changes to `onjuino.ino` to verify your code compiles before committing.
+
 ## 🧩 Hardware 
 
 <p float="left">
