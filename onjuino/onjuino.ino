@@ -70,10 +70,11 @@ uint8_t tcpBuffer[tcpBufferSize];
 int32_t *wavData = NULL; // assign later as PSRAM (or not) as a buffer for playback from TCP
 
 // how many samples to load from TCP before starting playing (avoid jitter due to running out of data w/ bad wifi)
+// With Opus compression, we can use smaller buffers (less latency)
 #ifdef USE_PSRAM
-int bufferThreshold = 8192;
+int bufferThreshold = 4096;  // 256ms @ 16kHz (12.8 frames @ 20ms)
 #else
-int bufferThreshold = 512;
+int bufferThreshold = 1024;  // 64ms @ 16kHz (3.2 frames @ 20ms)
 #endif
 
 // Mic settings
