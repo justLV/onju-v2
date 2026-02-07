@@ -20,6 +20,8 @@ recording.wav
 
 # Local development
 server/local.py
+pipeline/config.yaml
+.venv/
 
 # Claude
 .claude/

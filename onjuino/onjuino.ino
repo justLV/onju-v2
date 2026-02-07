@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <ESPmDNS.h>
 #include <driver/i2s.h>
 #include <Adafruit_NeoPixel.h>
 #include <Preferences.h>
@@ -25,7 +26,7 @@
 Preferences preferences;
 
 // Define default values
-#define DEFAULT_SERVER_HOSTNAME "default.server.com"
+#define DEFAULT_SERVER_HOSTNAME "default.server.com"  // Set via serial config: `c` then `server justins-mac-mini.local`
 #define DEFAULT_MIC_TIMEOUT 30000
 #define DEFAULT_SPEAKER_VOLUME 14
 
@@ -237,6 +238,35 @@ void setup()
 
     Serial.println("Starting TCP server");
     tcpServer.begin();
+
+    // mDNS: register ourselves and try to resolve server hostname
+    MDNS.begin(desired_hostname);
+
+    if (server_hostname != DEFAULT_SERVER_HOSTNAME)
+    {
+        Serial.printf("Resolving server hostname: %s\n", server_hostname.c_str());
+        // Strip ".local" suffix if present — MDNS.queryHost expects bare hostname
+        String queryHost = server_hostname;
+        if (queryHost.endsWith(".local"))
+        {
+            queryHost = queryHost.substring(0, queryHost.length() - 6);
+        }
+        for (int i = 0; i < 10; i++)
+        {
+            IPAddress resolved = MDNS.queryHost(queryHost.c_str());
+            if (resolved != INADDR_NONE)
+            {
+                serverIP = resolved;
+                Serial.printf("Resolved %s -> %s\n", server_hostname.c_str(), serverIP.toString().c_str());
+                break;
+            }
+            delay(200);
+        }
+        if (serverIP == IPAddress(0, 0, 0, 0))
+        {
+            Serial.println("mDNS resolution failed, falling back to multicast discovery");
+        }
+    }
 
     Serial.println("Sending multicast packet to announce presence");
     udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);

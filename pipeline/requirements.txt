@@ -1,0 +1,8 @@
+httpx
+numpy
+openai
+opuslib
+pydub
+PyYAML
+scipy
+webrtcvad
