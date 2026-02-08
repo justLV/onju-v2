@@ -2,6 +2,7 @@ httpx
 numpy
 openai
 opuslib
+pyaudio
 pydub
 PyYAML
 scipy

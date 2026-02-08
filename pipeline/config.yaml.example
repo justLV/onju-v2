@@ -43,7 +43,7 @@ device:
   led_fade: 6
   led_power: 35
   led_update_period: 0.2
-  persist_file: "devices.json"
+  persist_file: "data/devices.json"
   greeting_wav: "data/hello_imhere.wav"
 
 logging:

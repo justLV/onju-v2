@@ -23,5 +23,8 @@ server/local.py
 pipeline/config.yaml
 .venv/
 
+# Runtime data
+data/
+
 # Claude
 .claude/

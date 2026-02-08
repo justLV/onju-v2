@@ -24,5 +24,5 @@ async def transcribe(pcm_int16_bytes: bytes, config: dict) -> dict:
         resp.raise_for_status()
         data = resp.json()
 
-    log.debug(f"ASR: \"{data['text']}\" ({data.get('transcribe_time_s', '?')}s, nsp={data.get('no_speech_prob', '?')})")
+    log.info(f"ASR  \"{data['text']}\"  ({data.get('transcribe_time_s', '?')}s)")
     return data

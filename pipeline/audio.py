@@ -1,5 +1,14 @@
+import ctypes.util
 import io
+import os
 import struct
+import sys
+
+# macOS: help ctypes find Homebrew's libopus
+if sys.platform == "darwin" and ctypes.util.find_library("opus") is None:
+    _brew_lib = "/opt/homebrew/lib"
+    if os.path.exists(os.path.join(_brew_lib, "libopus.dylib")):
+        os.environ.setdefault("DYLD_LIBRARY_PATH", _brew_lib)
 
 import numpy as np
 import opuslib

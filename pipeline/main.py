@@ -6,6 +6,10 @@ import socket
 import struct
 import sys
 import time
+import warnings
+
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
+warnings.filterwarnings("ignore", category=SyntaxWarning, module="pydub")
 
 import numpy as np
 import yaml
@@ -35,7 +39,7 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", udp_port))
     sock.setblocking(False)
-    log.info(f"UDP listening on :{udp_port}")
+    log.info(f"UDP  listening on :{udp_port}")
 
     tcp_port = config["network"]["tcp_port"]
     dev_cfg = config["device"]
@@ -43,6 +47,9 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
     while True:
         data, addr = await loop.sock_recvfrom(sock, chunk_bytes * 2)
         device = manager.get_by_ip(addr[0])
+        if device is None and addr[0] == "127.0.0.1":
+            # Localhost test client: multicast announces from LAN IP but UDP comes from loopback
+            device = manager.get_most_recent()
         if device is None:
             continue
 
@@ -64,7 +71,7 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
         # VAD
         utterance = device.vad.process_frame(pcm)
         if utterance is not None:
-            log.info(f"Utterance from {device.hostname} ({len(utterance)/config['audio']['sample_rate']:.1f}s)")
+            log.info(f"VAD  utterance from {device.hostname}  ({len(utterance)/config['audio']['sample_rate']:.1f}s)")
             await utterance_queue.put((device, utterance))
 
 
@@ -82,13 +89,13 @@ async def multicast_listener(config: dict, manager: DeviceManager):
     group = socket.inet_aton(mcast_group)
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, group + socket.inet_aton("0.0.0.0"))
     sock.setblocking(False)
-    log.info(f"Multicast listening on {mcast_group}:{mcast_port}")
+    log.info(f"MCAST  listening on {mcast_group}:{mcast_port}")
 
     while True:
         data, addr = await loop.sock_recvfrom(sock, 1024)
         msg = data.decode("utf-8")
         hostname = msg.split()[0]
-        log.info(f"Device announced: {hostname} from {addr[0]}")
+        log.info(f"DEVICE  {hostname} ({addr[0]})")
 
         device = manager.create_device(hostname, addr[0])
 
@@ -126,13 +133,15 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
             pcm_bytes = audio_int16.astype(np.int16).tobytes()
             asr_result = await asr.transcribe(pcm_bytes, config)
             text = asr_result.get("text", "").strip()
-            nsp = asr_result.get("no_speech_prob", 1.0)
+            nsp = asr_result.get("no_speech_prob")
 
-            if not text or nsp > no_speech_threshold:
-                log.debug(f"Ignoring non-speech from {device.hostname} (nsp={nsp:.2f})")
+            if not text or (nsp is not None and nsp > no_speech_threshold):
+                log.info(f"ASR  (no speech, resuming mic)")
+                # Re-enable mic so device can keep listening
+                await send_audio(device.ip, tcp_port, b"",
+                                 mic_timeout=dev_cfg["default_mic_timeout"],
+                                 volume=0, fade=0)
                 continue
-
-            log.info(f"[{device.hostname}] User: {text}")
 
             # LLM
             device.messages.append({"role": "user", "content": text})
@@ -140,7 +149,7 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
             device.last_response = response_text
             device.prune_messages()
 
-            log.info(f"[{device.hostname}] Assistant: {response_text}")
+            log.info(f"LLM  {response_text}")
 
             # TTS
             pcm_response = await tts.synthesize(response_text, device.voice, config)
@@ -155,19 +164,51 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
 
         except Exception as e:
             log.error(f"Error processing utterance from {device.hostname}: {e}", exc_info=True)
+            # Re-enable mic after errors so device doesn't get stuck
+            try:
+                await send_audio(device.ip, tcp_port, b"",
+                                 mic_timeout=dev_cfg["default_mic_timeout"],
+                                 volume=0, fade=0)
+            except Exception:
+                pass
 
         utterance_queue.task_done()
+
+
+class ColorFormatter(logging.Formatter):
+    GREY = "\033[90m"
+    WHITE = "\033[37m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    RED = "\033[31m"
+    CYAN = "\033[36m"
+    RESET = "\033[0m"
+
+    LEVEL_COLORS = {
+        logging.DEBUG: GREY,
+        logging.INFO: WHITE,
+        logging.WARNING: YELLOW,
+        logging.ERROR: RED,
+    }
+
+    def format(self, record):
+        color = self.LEVEL_COLORS.get(record.levelno, self.WHITE)
+        ts = self.formatTime(record, "%H:%M:%S")
+        msg = record.getMessage()
+        return f"{self.GREY}{ts}{self.RESET}  {color}{msg}{self.RESET}"
 
 
 async def main(config_path: str = None):
     config = load_config(config_path)
 
     log_level = getattr(logging, config.get("logging", {}).get("level", "INFO"))
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s %(levelname)-7s %(name)s  %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(ColorFormatter())
+    logging.basicConfig(level=log_level, handlers=[handler])
+
+    # Suppress noisy third-party loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     manager = DeviceManager(config)
     atexit.register(manager.save)
@@ -176,7 +217,7 @@ async def main(config_path: str = None):
 
     utterance_queue = asyncio.Queue()
 
-    log.info("Starting pipeline server")
+    log.info("Pipeline server starting")
     await asyncio.gather(
         udp_listener(config, manager, utterance_queue),
         multicast_listener(config, manager),

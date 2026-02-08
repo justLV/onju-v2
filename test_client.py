@@ -8,13 +8,20 @@ Usage:
     python test_client.py --no-mic         # playback only, no mic
 """
 import argparse
-import audioop
+import ctypes.util
 import io
+import os
 import socket
 import struct
 import sys
 import threading
 import time
+
+# macOS: help ctypes find Homebrew's libopus
+if sys.platform == "darwin" and ctypes.util.find_library("opus") is None:
+    _brew_lib = "/opt/homebrew/lib"
+    if os.path.exists(os.path.join(_brew_lib, "libopus.dylib")):
+        os.environ.setdefault("DYLD_LIBRARY_PATH", _brew_lib)
 
 import numpy as np
 import opuslib
@@ -31,7 +38,16 @@ HOSTNAME = "test-client"
 
 # u-law compression (matching ESP32 audio_compression.h)
 def encode_ulaw(pcm_int16: np.ndarray) -> bytes:
-    return audioop.lin2ulaw(pcm_int16.tobytes(), 2)
+    samples = pcm_int16.astype(np.int32)
+    sign = np.where(samples < 0, 0x80, 0)
+    magnitude = np.abs(samples)
+    magnitude = np.clip(magnitude, 0, 32635)
+    magnitude = magnitude + 0x84
+    exponent = np.floor(np.log2(magnitude)).astype(np.int32) - 7
+    exponent = np.clip(exponent, 0, 7)
+    mantissa = (magnitude >> (exponent + 3)) & 0x0F
+    ulaw = ~(sign | (exponent << 4) | mantissa) & 0xFF
+    return ulaw.astype(np.uint8).tobytes()
 
 # u-law decompression table (same as pipeline/audio.py)
 ULAW_TABLE = np.array([
@@ -105,8 +121,6 @@ class TestClient:
             except socket.timeout:
                 continue
 
-            print(f"TCP connection from {addr[0]}")
-
             # Read 6-byte header
             header = b""
             while len(header) < 6:
@@ -141,6 +155,9 @@ class TestClient:
                 intensity = header[1]
                 r, g, b = header[2], header[3], header[4]
                 fade = header[5]
+                bar_len = intensity * 30 // 255
+                bar = "\033[32m" + "█" * bar_len + "\033[90m" + "░" * (30 - bar_len) + "\033[0m"
+                print(f"\r  VAD {bar} {intensity:3d}", end="", flush=True)
                 # Extend mic timeout if nearly expired (like ESP32)
                 if self.mic_active and self.mic_timeout > time.time():
                     if self.mic_timeout < time.time() + 5:
@@ -151,9 +168,9 @@ class TestClient:
                 self.mic_timeout = time.time() + timeout
                 if timeout == 0:
                     self.mic_active = False
-                    print("  MIC STOP (server processing)")
+                    print("\n  MIC STOP (server processing)")
                 else:
-                    print(f"  MIC TIMEOUT: {timeout}s")
+                    print(f"\n  MIC TIMEOUT: {timeout}s")
 
             else:
                 print(f"  Unknown command: {cmd:#04x}")

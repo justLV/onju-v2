@@ -25,5 +25,5 @@ async def chat(client: AsyncOpenAI, device, config: dict) -> str:
 
     text = response.choices[0].message.content or ""
     device.messages.append({"role": "assistant", "content": text})
-    log.info(f"LLM: {text}")
+    log.debug(f"LLM raw: {text}")
     return text

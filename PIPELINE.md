@@ -35,6 +35,9 @@ ollama serve  # default port 11434
 cd pipeline
 uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
+
+# macOS: install the Opus C library (required by opuslib)
+brew install opus
 ```
 
 ## Configuration
@@ -46,16 +49,11 @@ cp config.yaml.example config.yaml
 
 ## Running
 
-Start the three services, then the pipeline:
+Ensure the prerequisite services are running, then start the pipeline from the repo root:
 
 ```bash
-# Terminal 1 — ASR
-uvicorn main:app --port 8100
-
-# Terminal 2 — LLM
-mlx_lm.server --model mlx-community/gemma-3-4b-it-qat-4bit --port 8080
-
-# Terminal 3 — Pipeline
+# From repo root
+source pipeline/.venv/bin/activate
 python -m pipeline.main
 ```
 

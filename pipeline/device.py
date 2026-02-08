@@ -59,12 +59,12 @@ class DeviceManager:
         if device is None:
             device = Device(hostname, ip, self.config)
             self.devices[hostname] = device
-            log.info(f"New device: {hostname} ({ip})")
+            log.debug(f"New device: {hostname} ({ip})")
         elif device.ip != ip:
             device.ip = ip
-            log.info(f"Updated {hostname} IP to {ip}")
+            log.debug(f"Updated {hostname} IP to {ip}")
         else:
-            log.info(f"Device {hostname} reconnected ({ip})")
+            log.debug(f"Device {hostname} reconnected ({ip})")
         return device
 
     def get_by_ip(self, ip: str) -> Device | None:
@@ -73,8 +73,17 @@ class DeviceManager:
                 return d
         return None
 
+    def get_most_recent(self) -> Device | None:
+        """Return the most recently created device (fallback for localhost testing)."""
+        if self.devices:
+            return next(reversed(self.devices.values()))
+        return None
+
     def save(self):
         data = {k: v.to_dict() for k, v in self.devices.items()}
+        parent = os.path.dirname(self.persist_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         with open(self.persist_path, "w") as f:
             json.dump(data, f, indent=2)
         log.info(f"Saved {len(self.devices)} devices to {self.persist_path}")
