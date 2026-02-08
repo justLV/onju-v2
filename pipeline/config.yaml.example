@@ -19,12 +19,10 @@ tts:
       Rachel: "21m00Tcm4TlvDq8ikWAM"      # add your voice IDs here
 
 vad:
-  aggressiveness: 3
-  start_ratio: 0.35
-  silence_ratio: 0.2
+  threshold: 0.5          # speech onset probability
+  neg_threshold: 0.35     # speech offset probability (hysteresis)
   silence_time: 1.5
   pre_buffer_s: 1.0
-  window_s: 0.8
 
 network:
   udp_port: 3000
@@ -34,7 +32,7 @@ network:
 
 audio:
   sample_rate: 16000
-  chunk_size: 480       # 30ms at 16kHz
+  chunk_size: 512       # 32ms at 16kHz (Silero VAD requirement)
   opus_frame_size: 320  # 20ms at 16kHz
 
 device:

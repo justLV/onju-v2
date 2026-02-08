@@ -13,7 +13,7 @@ from collections import deque
 import numpy as np
 
 SAMPLE_RATE = 16000
-CHUNK_SIZE = 480
+CHUNK_SIZE = 512
 CHUNK_BYTES_RAW = CHUNK_SIZE * 2      # int16 = 2 bytes
 CHUNK_BYTES_COMPRESSED = CHUNK_SIZE   # μ-law = 1 byte
 

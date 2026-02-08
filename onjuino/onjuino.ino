@@ -79,7 +79,7 @@ int bufferThreshold = 1024;  // 64ms @ 16kHz (3.2 frames @ 20ms)
 #endif
 
 // Mic settings
-#define SAMPLE_CHUNK_SIZE 480                  // chosen to be 30ms (at 16kHz) for WebRTC VAD, and fit within UDP packet as int16 (480 * 2 < 1400)
+#define SAMPLE_CHUNK_SIZE 512                  // 32ms at 16kHz for Silero VAD, fits in UDP packet (512 bytes μ-law < 1400)
 int32_t micBuffer[SAMPLE_CHUNK_SIZE];          // For raw values from I2S
 int16_t convertedMicBuffer[SAMPLE_CHUNK_SIZE]; // For converted values to be sent over UDP
 

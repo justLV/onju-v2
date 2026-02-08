@@ -29,7 +29,7 @@ import pyaudio
 
 # Audio settings matching ESP32
 SAMPLE_RATE = 16000
-CHUNK_SIZE = 480        # 30ms at 16kHz
+CHUNK_SIZE = 512        # 32ms at 16kHz
 UDP_PORT = 3000
 TCP_PORT = 3001
 MULTICAST_GROUP = "239.0.0.1"

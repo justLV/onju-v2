@@ -8,7 +8,6 @@ import sys
 import time
 import warnings
 
-warnings.filterwarnings("ignore", message="pkg_resources is deprecated")
 warnings.filterwarnings("ignore", category=SyntaxWarning, module="pydub")
 
 import numpy as np
@@ -55,10 +54,13 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
 
         pcm = decode_ulaw(data)
 
-        # LED visualization
-        is_speech = device.vad.is_speech_now
-        if is_speech:
-            device.led_power = min(255, device.led_power + dev_cfg["led_power"])
+        # VAD
+        utterance = device.vad.process_frame(pcm)
+
+        # LED visualization (proportional to speech probability)
+        prob = device.vad.speech_prob
+        if prob > 0.1:
+            device.led_power = min(255, int(prob * 255))
         now = time.time()
         if now - device.led_update_time > dev_cfg["led_update_period"]:
             device.led_update_time = now
@@ -67,9 +69,6 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
                     send_led_blink(device.ip, tcp_port, device.led_power, fade=dev_cfg["led_fade"])
                 )
             device.led_power = 0
-
-        # VAD
-        utterance = device.vad.process_frame(pcm)
         if utterance is not None:
             log.info(f"VAD  utterance from {device.hostname}  ({len(utterance)/config['audio']['sample_rate']:.1f}s)")
             await utterance_queue.put((device, utterance))

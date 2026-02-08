@@ -27,7 +27,7 @@ Server → [PCM 16kHz] → Opus encode → TCP → ESP32 → Opus decode → I2S
 ## Packet Framing
 
 ### Current (PCM/μ-law)
-- Fixed size chunks: 480 bytes μ-law = 30ms audio
+- Fixed size chunks: 512 bytes μ-law = 32ms audio
 - No frame length needed (fixed size)
 
 ### Opus (variable bitrate)

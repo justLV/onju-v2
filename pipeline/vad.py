@@ -1,6 +1,27 @@
-import numpy as np
-import webrtcvad
+import logging
 from collections import deque
+
+import numpy as np
+import onnxruntime
+
+log = logging.getLogger(__name__)
+
+# Silero VAD v5+ constants for 16kHz
+_CONTEXT_SIZE = 64
+_NUM_SAMPLES = 512
+
+
+def _load_silero_onnx() -> onnxruntime.InferenceSession:
+    """Load the Silero VAD ONNX model from the silero-vad package."""
+    import silero_vad
+    from pathlib import Path
+
+    pkg_dir = Path(silero_vad.__file__).parent / "data"
+    model_path = pkg_dir / "silero_vad.onnx"
+    opts = onnxruntime.SessionOptions()
+    opts.inter_op_num_threads = 1
+    opts.intra_op_num_threads = 1
+    return onnxruntime.InferenceSession(str(model_path), sess_options=opts)
 
 
 class VAD:
@@ -12,41 +33,54 @@ class VAD:
         self.chunk_size = audio_cfg["chunk_size"]
         frames_per_sec = self.sample_rate // self.chunk_size
 
-        self.start_ratio = vad_cfg["start_ratio"]
-        self.silence_ratio = vad_cfg["silence_ratio"]
+        self.threshold = vad_cfg["threshold"]
+        self.neg_threshold = vad_cfg["neg_threshold"]
         self.silence_time = vad_cfg["silence_time"]
 
-        window_frames = int(vad_cfg["window_s"] * frames_per_sec)
         prebuf_frames = int(vad_cfg["pre_buffer_s"] * frames_per_sec)
 
-        self.vad = webrtcvad.Vad(vad_cfg["aggressiveness"])
-        self.window: deque[bool] = deque(maxlen=window_frames)
+        self.session = _load_silero_onnx()
         self.pre_buffer: deque[np.ndarray] = deque(maxlen=prebuf_frames)
         self.buffer: list[np.ndarray] = []
         self.recording = False
         self.silence_count = 0
         self.frames_per_sec = frames_per_sec
+        self.speech_prob = 0.0
+
+        # ONNX state: LSTM hidden (2, 1, 128) and audio context (1, 64)
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros((1, _CONTEXT_SIZE), dtype=np.float32)
+        self._sr = np.array(self.sample_rate, dtype=np.int64)
 
     def reset(self):
         self.buffer = []
         self.recording = False
         self.silence_count = 0
-        self.window.clear()
+        self.speech_prob = 0.0
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)
+        self._context = np.zeros((1, _CONTEXT_SIZE), dtype=np.float32)
 
     def process_frame(self, pcm_int16: np.ndarray) -> np.ndarray | None:
-        """Feed a 30ms PCM frame. Returns complete utterance audio (int16) when speech ends, else None."""
-        raw = pcm_int16.tobytes()
-        is_speech = self.vad.is_speech(raw, self.sample_rate)
-        self.window.append(is_speech)
+        """Feed a 512-sample (32ms) PCM frame. Returns utterance audio (int16) when speech ends."""
+        # Convert int16 -> float32 normalized [-1, 1]
+        pcm_f32 = pcm_int16.astype(np.float32) / 32768.0
+        x = pcm_f32.reshape(1, -1)  # (1, 512)
 
-        if len(self.window) < self.window.maxlen:
-            return None
+        # Prepend context from previous frame
+        x_with_ctx = np.concatenate([self._context, x], axis=1)  # (1, 576)
 
-        ratio = sum(self.window) / len(self.window)
+        # Run ONNX inference
+        ort_inputs = {"input": x_with_ctx, "state": self._state, "sr": self._sr}
+        out, self._state = self.session.run(None, ort_inputs)
+
+        # Update context for next frame
+        self._context = x_with_ctx[:, -_CONTEXT_SIZE:]
+
+        self.speech_prob = float(out[0, 0])
 
         if not self.recording:
             self.pre_buffer.append(pcm_int16)
-            if ratio > self.start_ratio:
+            if self.speech_prob >= self.threshold:
                 self.recording = True
                 self.buffer.extend(self.pre_buffer)
                 self.pre_buffer.clear()
@@ -54,7 +88,7 @@ class VAD:
 
         self.buffer.append(pcm_int16)
 
-        if ratio < self.silence_ratio:
+        if self.speech_prob < self.neg_threshold:
             self.silence_count += 1
             if self.silence_count > self.silence_time * self.frames_per_sec:
                 audio = np.concatenate(self.buffer)
@@ -67,6 +101,4 @@ class VAD:
 
     @property
     def is_speech_now(self) -> bool:
-        if not self.window:
-            return False
-        return bool(self.window[-1])
+        return self.speech_prob >= self.threshold

@@ -37,8 +37,8 @@ ESP32-S3 voice assistant with bidirectional audio streaming over WiFi to a serve
 
 ### Microphone → Server (UDP + μ-law)
 
-- Sample rate: 16kHz mono, 480 samples/chunk (30ms)
-- μ-law compressed: 480 bytes/chunk (16 KB/s) — 2x reduction
+- Sample rate: 16kHz mono, 512 samples/chunk (32ms)
+- μ-law compressed: 512 bytes/chunk (16 KB/s) — 2x reduction
 - UDP: no retransmissions, no connection overhead — old audio is stale anyway
 - DC offset removed per-chunk before encoding
 
@@ -145,7 +145,7 @@ Key state variables controlling behavior:
 
 - **Pulse-and-fade paradigm:** `setLed()` sets color, starting intensity, and fade rate. `updateLedTask` ramps intensity down at 40Hz.
 - **Gamma correction:** LUT with gamma 1.8 (lower than typical 2.2 to avoid visible flicker at low PWM levels)
-- **Audio-reactive:** During playback, amplitude of PCM samples drives LED brightness (sampled every 30ms, only ramps up — natural fade handles the down)
+- **Audio-reactive:** During playback, amplitude of PCM samples drives LED brightness (sampled every 32ms, only ramps up — natural fade handles the down)
 
 **Color semantics:**
 - Green pulse: listening / mic active
@@ -164,7 +164,7 @@ TCP → tcpBuffer (512B) → wavData (2MB PSRAM) → I2S DMA → Speaker
 
 - **Buffer threshold:** 4096 samples (256ms) before starting I2S playback — balances latency vs jitter resilience
 - **Without PSRAM:** falls back to 1024 samples (64ms), 4KB allocation
-- **I2S DMA:** 4 buffers × 480 samples, hardware-driven (no CPU polling)
+- **I2S DMA:** 4 buffers × 512 samples, hardware-driven (no CPU polling)
 
 ## Configuration
 

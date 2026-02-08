@@ -9,7 +9,7 @@ import numpy as np
 
 ESP32_IP = '192.168.68.90'  # Update this if your ESP32 has a different IP
 UDP_PORT = 3000
-CHUNK_SIZE = 480
+CHUNK_SIZE = 512
 
 # μ-law decode table
 ULAW_DECODE_TABLE = np.array([

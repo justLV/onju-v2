@@ -1,10 +1,10 @@
 httpx
 numpy
+onnxruntime
 openai
 opuslib
 pyaudio
 pydub
 PyYAML
 scipy
-setuptools
-webrtcvad
+silero-vad

@@ -1,9 +1,0 @@
-httpx
-numpy
-openai
-opuslib
-pydub
-PyYAML
-scipy
-setuptools
-webrtcvad

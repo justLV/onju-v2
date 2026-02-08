@@ -10,8 +10,8 @@ In `onjuino/onjuino.ino`, adjust these settings (lines 78-84):
 #define USE_COMPRESSION true        // Enable μ-law compression (2x bandwidth reduction)
 #define USE_LOCAL_VAD true          // Enable local VAD to sleep when silent
 #define VAD_RMS_THRESHOLD 3000      // RMS threshold to detect voice (tune based on your mic)
-#define VAD_SILENCE_FRAMES 100      // Frames of silence before sleep (100 * 30ms = 3 seconds)
-#define VAD_WAKEUP_FRAMES 2         // Frames of voice to wake up (2 * 30ms = 60ms)
+#define VAD_SILENCE_FRAMES 100      // Frames of silence before sleep (100 * 32ms = 3.2 seconds)
+#define VAD_WAKEUP_FRAMES 2         // Frames of voice to wake up (2 * 32ms = 64ms)
 ```
 
 **Testing configurations:**
@@ -162,9 +162,9 @@ def decode_ulaw(ulaw_bytes):
 # In listen_detect function:
 data, addr = sock.recvfrom(2048)
 
-if len(data) == 480:  # Compressed
+if len(data) == 512:  # Compressed
     samples = decode_ulaw(data)
-elif len(data) == 960:  # Raw
+elif len(data) == 1024:  # Raw
     samples = np.frombuffer(data, dtype=np.int16)
 
 # Continue with existing VAD pipeline...
