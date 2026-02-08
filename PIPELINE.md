@@ -32,18 +32,18 @@ ollama serve  # default port 11434
 ## Setup
 
 ```bash
-cd pipeline
+# From repo root
 uv venv && source .venv/bin/activate
 uv pip install -r requirements.txt
 
-# macOS: install the Opus C library (required by opuslib)
-brew install opus
+# macOS: install system libraries
+brew install opus portaudio
 ```
 
 ## Configuration
 
 ```bash
-cp config.yaml.example config.yaml
+cp pipeline/config.yaml.example pipeline/config.yaml
 # Edit config.yaml with your API keys and preferences
 ```
 
@@ -52,8 +52,7 @@ cp config.yaml.example config.yaml
 Ensure the prerequisite services are running, then start the pipeline from the repo root:
 
 ```bash
-# From repo root
-source pipeline/.venv/bin/activate
+source .venv/bin/activate
 python -m pipeline.main
 ```
 
