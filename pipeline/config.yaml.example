@@ -10,8 +10,12 @@ llm:
   system_prompt: "You are a helpful voice assistant. Keep responses concise (under 2 sentences)."
 
 tts:
-  backend: "elevenlabs"
-  default_voice: "Rachel"
+  backend: "qwen3"                         # "qwen3" (local) or "elevenlabs" (cloud)
+  qwen3:
+    url: "http://localhost:8880"            # mlx-audio server (start with: python -m mlx_audio.server --port 8880)
+    model: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
+    ref_audio: ""                           # path to 3-10s reference clip for voice cloning
+    ref_text: ""                           # optional transcript of reference audio
   elevenlabs:
     api_key: ""                            # your ElevenLabs API key
     default_voice: "Rachel"
