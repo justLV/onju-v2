@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import atexit
 import logging
@@ -143,6 +144,7 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
                 continue
 
             # LLM
+            device.sanitize_messages()
             device.messages.append({"role": "user", "content": text})
             response_text = await llm.chat(llm_client, device, config)
             device.last_response = response_text
@@ -197,7 +199,43 @@ class ColorFormatter(logging.Formatter):
         return f"{self.GREY}{ts}{self.RESET}  {color}{msg}{self.RESET}"
 
 
-async def main(config_path: str = None):
+async def warmup(config: dict, llm_client):
+    """Validate LLM and TTS backends are reachable and preload models."""
+    log.info("Warming up LLM and TTS...")
+
+    async def _warmup_llm():
+        t0 = time.time()
+        try:
+            resp = await llm_client.chat.completions.create(
+                model=config["llm"]["model"],
+                messages=[{"role": "user", "content": "Hi"}],
+                max_tokens=5,
+            )
+            text = resp.choices[0].message.content or ""
+            if not text.strip():
+                log.error(f"LLM  warmup FAILED ({time.time() - t0:.1f}s): empty response")
+            else:
+                log.info(f"LLM  warmup OK  ({time.time() - t0:.1f}s) -> {text.strip()!r}")
+        except Exception as e:
+            log.error(f"LLM  warmup FAILED ({time.time() - t0:.1f}s): {e}")
+
+    async def _warmup_tts():
+        t0 = time.time()
+        try:
+            pcm = await tts.synthesize("Hello.", "default", config)
+            duration_ms = len(pcm) / (16000 * 2) * 1000  # 16kHz 16-bit mono
+            if duration_ms < 100:
+                log.error(f"TTS  warmup FAILED ({time.time() - t0:.1f}s): audio too short ({duration_ms:.0f}ms)")
+            else:
+                log.info(f"TTS  warmup OK  ({time.time() - t0:.1f}s) -> {duration_ms:.0f}ms audio")
+        except Exception as e:
+            log.error(f"TTS  warmup FAILED ({time.time() - t0:.1f}s): {e}")
+
+    await asyncio.gather(_warmup_llm(), _warmup_tts())
+    log.info("Warmup complete")
+
+
+async def main(config_path: str = None, do_warmup: bool = False, persist: bool = False):
     config = load_config(config_path)
 
     log_level = getattr(logging, config.get("logging", {}).get("level", "INFO"))
@@ -209,10 +247,14 @@ async def main(config_path: str = None):
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-    manager = DeviceManager(config)
-    atexit.register(manager.save)
+    manager = DeviceManager(config, persist=persist)
+    if persist:
+        atexit.register(manager.save)
 
     llm_client = llm.make_client(config)
+
+    if do_warmup:
+        await warmup(config, llm_client)
 
     utterance_queue = asyncio.Queue()
 
@@ -225,5 +267,9 @@ async def main(config_path: str = None):
 
 
 if __name__ == "__main__":
-    config_path = sys.argv[1] if len(sys.argv) > 1 else None
-    asyncio.run(main(config_path))
+    parser = argparse.ArgumentParser(description="Voice pipeline server")
+    parser.add_argument("config", nargs="?", default=None, help="Path to config YAML")
+    parser.add_argument("--warmup", action="store_true", help="Warmup LLM and TTS on startup")
+    parser.add_argument("--persist", action="store_true", help="Persist device state across restarts")
+    args = parser.parse_args()
+    asyncio.run(main(args.config, do_warmup=args.warmup, persist=args.persist))

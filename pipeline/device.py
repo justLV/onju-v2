@@ -25,6 +25,24 @@ class Device:
         while len(self.messages) > max_msgs:
             self.messages.pop(1)  # keep system prompt at [0]
 
+    def sanitize_messages(self):
+        """Ensure messages alternate user/assistant after the system prompt.
+        Drops messages that break alternation and trims trailing user messages
+        (orphaned from crashes where the LLM never responded)."""
+        cleaned = [self.messages[0]] if self.messages and self.messages[0]["role"] == "system" else []
+        expected = "user"
+        start = 1 if cleaned else 0
+        for msg in self.messages[start:]:
+            if msg["role"] == "system":
+                continue
+            if msg["role"] == expected:
+                cleaned.append(msg)
+                expected = "assistant" if expected == "user" else "user"
+        # Trim trailing user message (no LLM response = orphaned)
+        if len(cleaned) > 1 and cleaned[-1]["role"] == "user":
+            cleaned.pop()
+        self.messages = cleaned
+
     def to_dict(self) -> dict:
         return {
             "hostname": self.hostname,
@@ -35,24 +53,27 @@ class Device:
 
     @classmethod
     def from_dict(cls, data: dict, config: dict) -> "Device":
-        return cls(
+        device = cls(
             data["hostname"],
             data["ip"],
             config,
             messages=data.get("messages"),
             voice=data.get("voice"),
         )
+        device.sanitize_messages()
+        return device
 
     def __repr__(self):
         return f"<Device {self.hostname} {self.ip} [{len(self.messages)-1} msgs]>"
 
 
 class DeviceManager:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, persist: bool = False):
         self.config = config
         self.devices: dict[str, Device] = {}
-        self.persist_path = config["device"].get("persist_file", "devices.json")
-        self._load()
+        self.persist_path = config["device"].get("persist_file", "data/devices.json") if persist else None
+        if self.persist_path:
+            self._load()
 
     def create_device(self, hostname: str, ip: str) -> Device:
         device = self.devices.get(hostname)
@@ -80,6 +101,8 @@ class DeviceManager:
         return None
 
     def save(self):
+        if not self.persist_path:
+            return
         data = {k: v.to_dict() for k, v in self.devices.items()}
         parent = os.path.dirname(self.persist_path)
         if parent:
