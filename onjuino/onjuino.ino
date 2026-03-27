@@ -61,6 +61,15 @@ volatile unsigned long lastTouchTimeCenter = 0;
 volatile unsigned long lastTouchTimeRight = 0;
 const unsigned long TOUCH_DEBOUNCE_MS = 800; // 800ms between valid touches
 
+// Long-press detection for center touch
+volatile unsigned long touchStartTimeCenter = 0;
+volatile bool centerTouchActive = false;
+const unsigned long LONG_PRESS_MS = 1500;
+const unsigned long MIC_LISTEN_MS = 20000; // 20s default (server VAD extends when needed)
+
+// Call state
+volatile bool callActive = false;
+
 const double gammaValue = 1.8; // dropped this down from typical 2.2 to avoid flicker
 uint8_t gammaCorrectionTable[256];
 
@@ -399,6 +408,23 @@ void loop()
         }
     }
 
+    // Long-press detection: ISR records touch-start, we poll for release
+    if (centerTouchActive) {
+        uint16_t touchVal = touchRead(T_C);
+        unsigned long elapsed = millis() - touchStartTimeCenter;
+
+        if (touchVal > 1800) { // Finger released
+            centerTouchActive = false;
+            lastTouchTimeCenter = millis();
+
+            if (elapsed >= LONG_PRESS_MS) {
+                handleLongPress();
+            } else {
+                handleShortPress();
+            }
+        }
+    }
+
     WiFiClient client = tcpServer.available();
     if (client)
     {
@@ -653,8 +679,8 @@ void loop()
 
             isPlaying = false;
 
-            // Enforce minimum 60s timeout after playback
-            uint32_t timeout_ms = max(timeout * 1000, 60000);
+            // Enforce minimum 20s timeout after playback (server VAD extends when active)
+            uint32_t timeout_ms = max((uint32_t)(timeout * 1000), (uint32_t)MIC_LISTEN_MS);
             mic_timeout = millis() + timeout_ms;
             Serial.println("Done loading audio in buffers in " + String(millis() - tic) + "ms");
             Serial.println("Set mic_timeout to " + String(mic_timeout) + " (" + String(timeout_ms/1000) + "s)");
@@ -691,7 +717,8 @@ void loop()
             setLed(header[2], header[3], header[4], header[1], header[5]);
             client.stop();
 
-            if(mic_timeout > millis()) // if already listening...
+            if(!callActive) ; // Don't extend mic if user ended the call
+            else if(mic_timeout > millis()) // if already listening...
             {
                 if (mic_timeout < (millis() + VAD_MIC_EXTEND)) // and about to run out of time...
                 {
@@ -878,6 +905,7 @@ void micTask(void *pvParameters)
             if (prevState)
             {
                 Serial.println("Timeout reached");
+                callActive = false;
             }
         }
         else
@@ -1025,43 +1053,70 @@ void gotTouch3()
     Serial.println("Touch right [not implemented]");
 }
 
-void gotTouch2() // center touch
+void gotTouch2() // center touch ISR - just record touch start
 {
     unsigned long currentTime = millis();
+    if (currentTime - lastTouchTimeCenter < 300) return; // light debounce
 
-    // Debounce: ignore touches that occur too quickly after the last one
-    if (currentTime - lastTouchTimeCenter < TOUCH_DEBOUNCE_MS)
-    {
-        // Touch ignored due to debounce
-        return;
+    if (!centerTouchActive) {
+        touchStartTimeCenter = currentTime;
+        centerTouchActive = true;
     }
+}
 
-    lastTouchTimeCenter = currentTime;
-    Serial.println("Center touch");
+void handleShortPress()
+{
+    Serial.println("Center touch: SHORT PRESS");
 
     if (mute || serverIP == IPAddress(0, 0, 0, 0))
     {
-        setLed(255, 30, 0, 255, 10); // cannot listen
+        setLed(255, 30, 0, 255, 10);
+        return;
     }
-    else if (isPlaying)
+
+    if (isPlaying)
     {
-        // Interrupt assistant playback
         Serial.println("Interrupting playback...");
         interruptPlayback = true;
-        isPlaying = false; // Mark as not playing immediately
-
-        // Enable microphone immediately (60s to speak)
-        mic_timeout = millis() + 60000;
-
-        // Visual feedback: green = listening
+        isPlaying = false;
+        mic_timeout = millis() + MIC_LISTEN_MS;
         setLed(0, 255, 30, 255, 10);
     }
-    else if (mic_timeout < (millis() + 60000))
+    else
     {
-        // give 60 seconds to speak
-        mic_timeout = millis() + 60000;
-        setLed(0, 255, 30, 255, 10);
+        mic_timeout = millis() + MIC_LISTEN_MS;
+
+        if (!callActive)
+        {
+            callActive = true;
+            setLed(0, 255, 50, 100, 15); // quick subtle green flash = tap acknowledged
+            Serial.println("Call STARTING");
+            // Server will send a slow green pulse (0xCC) once the call is actually connected
+        }
+        else
+        {
+            setLed(0, 255, 30, 255, 10);
+        }
     }
+}
+
+void handleLongPress()
+{
+    Serial.println("Center touch: LONG PRESS - ending call");
+
+    mic_timeout = 0;
+
+    if (isPlaying)
+    {
+        interruptPlayback = true;
+        isPlaying = false;
+    }
+
+    callActive = false;
+
+    setLed(255, 100, 0, 200, 2); // slow amber pulse = call ended
+
+    Serial.println("Call ENDED");
 }
 
 void enterConfigMode() {
