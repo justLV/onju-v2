@@ -326,6 +326,7 @@ void setup()
 
     xTaskCreatePinnedToCore(micTask, "MicTask", 4096, NULL, 1, NULL, 1);
     xTaskCreatePinnedToCore(updateLedTask, "updateLedTask", 2048, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(touchTask, "TouchTask", 2048, NULL, 2, NULL, 1);
 }
 
 void loop()
@@ -405,23 +406,6 @@ void loop()
         default:
             Serial.println("[UART] Unknown command: " + String(inChar));
             break;
-        }
-    }
-
-    // Long-press detection: ISR records touch-start, we poll for release
-    if (centerTouchActive) {
-        uint16_t touchVal = touchRead(T_C);
-        unsigned long elapsed = millis() - touchStartTimeCenter;
-
-        if (touchVal > 1800) { // Finger released
-            centerTouchActive = false;
-            lastTouchTimeCenter = millis();
-
-            if (elapsed >= LONG_PRESS_MS) {
-                handleLongPress();
-            } else {
-                handleShortPress();
-            }
         }
     }
 
@@ -1025,6 +1009,28 @@ void setLed(uint8_t r, uint8_t g, uint8_t b, uint8_t level, uint8_t fade)
 }
 
 // volume currently implemented as header from server
+void touchTask(void *parameter)
+{
+    while (1) {
+        if (centerTouchActive) {
+            uint16_t touchVal = touchRead(T_C);
+            unsigned long elapsed = millis() - touchStartTimeCenter;
+
+            if (touchVal > 1800) { // Finger released
+                centerTouchActive = false;
+                lastTouchTimeCenter = millis();
+
+                if (elapsed >= LONG_PRESS_MS) {
+                    handleLongPress();
+                } else {
+                    handleShortPress();
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(20)); // Poll every 20ms
+    }
+}
+
 void gotTouch1()
 {
     unsigned long currentTime = millis();
