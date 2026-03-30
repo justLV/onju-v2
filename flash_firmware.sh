@@ -138,17 +138,21 @@ if [ "$COMPILE_ONLY" = true ]; then
 fi
 
 # -------------------------------------------------------
-# Detect ESP32 USB port
+# Compile then detect port
 # -------------------------------------------------------
+compile_firmware
+
 if [ -z "$PORT" ]; then
     PORT=$(ls /dev/cu.usbmodem* 2>/dev/null | head -n 1 || true)
     if [ -z "$PORT" ]; then
+        echo ""
         echo "Error: No USB serial port found (looking for /dev/cu.usbmodem*)"
         exit 1
     fi
     echo "Auto-detected port: $PORT"
 fi
 
+echo ""
 echo "Flashing firmware to $PORT..."
 echo "If upload fails, press and hold BOOT button, press RESET, then release BOOT"
 echo ""
@@ -157,9 +161,6 @@ echo ""
 pkill -f "serial_monitor" 2>/dev/null || true
 pkill -f "python.*serial" 2>/dev/null || true
 sleep 1
-
-compile_firmware
-echo ""
 
 echo "Uploading..."
 cd "$REPO/onjuino"
