@@ -61,10 +61,10 @@ volatile unsigned long lastTouchTimeCenter = 0;
 volatile unsigned long lastTouchTimeRight = 0;
 const unsigned long TOUCH_DEBOUNCE_MS = 800; // 800ms between valid touches
 
-// Long-press detection for center touch
-volatile unsigned long touchStartTimeCenter = 0;
-volatile bool centerTouchActive = false;
-const unsigned long LONG_PRESS_MS = 1500;
+// Double-tap detection for center touch
+volatile unsigned long firstTapTime = 0;
+volatile bool waitingForSecondTap = false;
+const unsigned long DOUBLE_TAP_WINDOW_MS = 500;
 const unsigned long MIC_LISTEN_MS = 20000; // 20s default (server VAD extends when needed)
 
 // Call state
@@ -1012,22 +1012,11 @@ void setLed(uint8_t r, uint8_t g, uint8_t b, uint8_t level, uint8_t fade)
 void touchTask(void *parameter)
 {
     while (1) {
-        if (centerTouchActive) {
-            uint16_t touchVal = touchRead(T_C);
-            unsigned long elapsed = millis() - touchStartTimeCenter;
-
-            if (touchVal > 1800) { // Finger released
-                centerTouchActive = false;
-                lastTouchTimeCenter = millis();
-
-                if (elapsed >= LONG_PRESS_MS) {
-                    handleLongPress();
-                } else {
-                    handleShortPress();
-                }
-            }
+        // Clear double-tap window if it expired
+        if (waitingForSecondTap && (millis() - firstTapTime >= DOUBLE_TAP_WINDOW_MS)) {
+            waitingForSecondTap = false;
         }
-        vTaskDelay(pdMS_TO_TICKS(20)); // Poll every 20ms
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
@@ -1059,14 +1048,24 @@ void gotTouch3()
     Serial.println("Touch right [not implemented]");
 }
 
-void gotTouch2() // center touch ISR - just record touch start
+void gotTouch2() // center touch ISR
 {
     unsigned long currentTime = millis();
-    if (currentTime - lastTouchTimeCenter < 300) return; // light debounce
+    if (currentTime - lastTouchTimeCenter < 300) return; // debounce
+    lastTouchTimeCenter = currentTime;
 
-    if (!centerTouchActive) {
-        touchStartTimeCenter = currentTime;
-        centerTouchActive = true;
+    if (waitingForSecondTap && (currentTime - firstTapTime < DOUBLE_TAP_WINDOW_MS)) {
+        // Second tap within window → double-tap = end call
+        waitingForSecondTap = false;
+        handleDoubleTap();
+    } else {
+        // First tap → act immediately
+        handleShortPress();
+        // If in a call, also start watching for second tap
+        if (callActive) {
+            firstTapTime = currentTime;
+            waitingForSecondTap = true;
+        }
     }
 }
 
@@ -1106,9 +1105,9 @@ void handleShortPress()
     }
 }
 
-void handleLongPress()
+void handleDoubleTap()
 {
-    Serial.println("Center touch: LONG PRESS - ending call");
+    Serial.println("Center touch: DOUBLE TAP - ending call");
 
     mic_timeout = 0;
 
