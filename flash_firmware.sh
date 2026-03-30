@@ -141,7 +141,7 @@ fi
 # Detect ESP32 USB port
 # -------------------------------------------------------
 if [ -z "$PORT" ]; then
-    PORT=$(ls /dev/cu.usbmodem* 2>/dev/null | head -n 1)
+    PORT=$(ls /dev/cu.usbmodem* 2>/dev/null | head -n 1 || true)
     if [ -z "$PORT" ]; then
         echo "Error: No USB serial port found (looking for /dev/cu.usbmodem*)"
         exit 1
