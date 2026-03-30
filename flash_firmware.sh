@@ -45,20 +45,27 @@ else
     WIFI_IF=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{getline; print $2}')
     WIFI_IF="${WIFI_IF:-en0}"
 
-    # Method 1: networksetup (works on older macOS)
+    # Method 1: networksetup (works on older macOS, redacted on Tahoe+)
     WIFI_SSID=$(networksetup -getairportnetwork "$WIFI_IF" 2>/dev/null | sed 's/Current Wi-Fi Network: //')
     if [ -z "$WIFI_SSID" ] || [[ "$WIFI_SSID" == *"not associated"* ]] || [[ "$WIFI_SSID" == *"not a Wi-Fi"* ]] || [[ "$WIFI_SSID" == *"Error"* ]]; then
         WIFI_SSID=""
     fi
 
-    # Method 2: Keychain (macOS Tahoe+ redacts SSID from most APIs)
+    # Method 2: macOS Tahoe+ redacts SSID from most APIs, so offer the
+    # preferred networks list and let the user confirm/pick
     if [ -z "$WIFI_SSID" ]; then
-        WIFI_SSID=$(security find-generic-password -D "AirPort network password" 2>/dev/null \
-            | awk -F'"' '/"acct"<blob>=/{print $4}')
+        PREFERRED=$(networksetup -listpreferredwirelessnetworks "$WIFI_IF" 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
+        if [ -n "$PREFERRED" ]; then
+            TOP_SSID=$(echo "$PREFERRED" | head -1)
+            echo "Known WiFi networks:"
+            echo "$PREFERRED" | head -5 | cat -n
+            echo ""
+            read -p "WiFi SSID [$TOP_SSID]: " WIFI_SSID
+            WIFI_SSID="${WIFI_SSID:-$TOP_SSID}"
+        fi
     fi
 
     if [ -z "$WIFI_SSID" ]; then
-        echo "Could not auto-detect WiFi SSID."
         read -p "WiFi SSID: " WIFI_SSID
     fi
 
