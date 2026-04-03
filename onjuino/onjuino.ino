@@ -15,6 +15,10 @@
 #define BOARD_V3
 #define HOST_NAME "onju-coral"
 
+// Set to true for push-to-talk mode (hold button = mic on, release = mic off)
+// PTT devices auto-start a call on boot and power-off to disconnect
+#define PTT_MODE false
+
 #include "custom_boards.h"
 #include "credentials.h"
 #include "audio_compression.h"
@@ -69,6 +73,9 @@ const unsigned long MIC_LISTEN_MS = 20000; // 20s default (server VAD extends wh
 
 // Call state
 volatile bool callActive = false;
+
+// PTT state: mic only active while button held
+volatile bool pttHeld = false;
 
 const double gammaValue = 1.8; // dropped this down from typical 2.2 to avoid flicker
 uint8_t gammaCorrectionTable[256];
@@ -280,8 +287,16 @@ void setup()
     Serial.println("Sending multicast packet to announce presence");
     udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);
     String mcast_string = String(hostname) + " " + String(GIT_HASH);
+    if (PTT_MODE) mcast_string += " PTT";
     udp.write(reinterpret_cast<const uint8_t *>(mcast_string.c_str()), mcast_string.length());
     udp.endPacket();
+
+    // PTT: auto-start call on boot — bridge will start Sesame session on discovery
+    if (PTT_MODE) {
+        callActive = true;
+        Serial.println("PTT mode: call auto-started on boot");
+        setLed(0, 100, 255, 200, 3); // blue pulse = PTT idle, waiting for bridge
+    }
 
     i2s_driver_install(I2S_NUM, &i2s_config, 0, NULL);
     i2s_set_pin(I2S_NUM, &pin_config);
@@ -366,6 +381,7 @@ void loop()
             Serial.println("[UART] Sending multicast announcement");
             udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);
             String mcast_string = String(WiFi.getHostname()) + " " + String(GIT_HASH);
+            if (PTT_MODE) mcast_string += " PTT";
             udp.write(reinterpret_cast<const uint8_t *>(mcast_string.c_str()), mcast_string.length());
             udp.endPacket();
             Serial.println("[UART] Multicast sent");
@@ -663,11 +679,13 @@ void loop()
 
             isPlaying = false;
 
-            // Enforce minimum 20s timeout after playback (server VAD extends when active)
-            uint32_t timeout_ms = max((uint32_t)(timeout * 1000), (uint32_t)MIC_LISTEN_MS);
-            mic_timeout = millis() + timeout_ms;
+            if (!PTT_MODE) {
+                // VOX: enforce minimum 20s timeout after playback (server VAD extends when active)
+                uint32_t timeout_ms = max((uint32_t)(timeout * 1000), (uint32_t)MIC_LISTEN_MS);
+                mic_timeout = millis() + timeout_ms;
+                Serial.println("Set mic_timeout to " + String(mic_timeout) + " (" + String(timeout_ms/1000) + "s)");
+            }
             Serial.println("Done loading audio in buffers in " + String(millis() - tic) + "ms");
-            Serial.println("Set mic_timeout to " + String(mic_timeout) + " (" + String(timeout_ms/1000) + "s)");
         }
         /*
         header[0]   0xBB for set LED command
@@ -701,7 +719,9 @@ void loop()
             setLed(header[2], header[3], header[4], header[1], header[5]);
             client.stop();
 
-            if(!callActive) ; // Don't extend mic if user ended the call
+            // PTT doesn't use mic timeouts — skip extension logic
+            if (PTT_MODE) ;
+            else if(!callActive) ; // Don't extend mic if user ended the call
             else if(mic_timeout > millis()) // if already listening...
             {
                 if (mic_timeout < (millis() + VAD_MIC_EXTEND)) // and about to run out of time...
@@ -884,7 +904,9 @@ void micTask(void *pvParameters)
             ;
         else if (serverIP == IPAddress(0, 0, 0, 0)) // no server greeted us yet, so nowhere to send data
             ;
-        else if (mic_timeout < millis()) // alotted time for speaking has passed
+        else if (PTT_MODE && !pttHeld) // PTT: only send when button held
+            ;
+        else if (!PTT_MODE && mic_timeout < millis()) // VOX: alotted time for speaking has passed
         {
             if (prevState)
             {
@@ -1012,9 +1034,33 @@ void setLed(uint8_t r, uint8_t g, uint8_t b, uint8_t level, uint8_t fade)
 void touchTask(void *parameter)
 {
     while (1) {
-        // Clear double-tap window if it expired
-        if (waitingForSecondTap && (millis() - firstTapTime >= DOUBLE_TAP_WINDOW_MS)) {
-            waitingForSecondTap = false;
+        if (PTT_MODE) {
+            // PTT: poll touch state to detect hold/release
+            // touchRead returns LOW when touched on ESP32-S3
+            uint16_t val = touchRead(T_C);
+            bool touched = (val < 1800); // same threshold as ISR
+
+            if (touched && !pttHeld) {
+                pttHeld = true;
+                Serial.println("PTT: button DOWN");
+
+                // Interrupt playback if assistant is speaking
+                if (isPlaying) {
+                    interruptPlayback = true;
+                    isPlaying = false;
+                }
+
+                setLed(0, 255, 30, 255, 10); // green = transmitting
+            } else if (!touched && pttHeld) {
+                pttHeld = false;
+                Serial.println("PTT: button UP");
+                setLed(0, 100, 255, 100, 5); // dim blue = idle/listening
+            }
+        } else {
+            // VOX: clear double-tap window if it expired
+            if (waitingForSecondTap && (millis() - firstTapTime >= DOUBLE_TAP_WINDOW_MS)) {
+                waitingForSecondTap = false;
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
@@ -1050,6 +1096,9 @@ void gotTouch3()
 
 void gotTouch2() // center touch ISR
 {
+    // PTT mode uses polling in touchTask instead of ISR
+    if (PTT_MODE) return;
+
     unsigned long currentTime = millis();
     if (currentTime - lastTouchTimeCenter < 300) return; // debounce
     lastTouchTimeCenter = currentTime;
