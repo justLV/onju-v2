@@ -26,7 +26,7 @@
 #define SAMPLE_CHUNK  512
 
 #define DEFAULT_SERVER   "default.server.com"
-#define DEFAULT_VOLUME   13
+#define DEFAULT_VOLUME   5
 
 Adafruit_NeoPixel led(1, LED_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -49,8 +49,8 @@ volatile I2SMode currentMode = MODE_NONE;
 int16_t micBuffer[SAMPLE_CHUNK];
 uint8_t compressedMicBuffer[SAMPLE_CHUNK];
 
-// Speaker buffer (16-bit mono)
-int16_t spkBuffer[4096];
+// Speaker buffer (stereo-interleaved for ALL_RIGHT I2S)
+int16_t spkBuffer[8192];
 int bufferThreshold = 2048; // 128ms at 16kHz — more headroom against WiFi jitter
 const size_t tcpBufSize = 512;
 uint8_t tcpBuffer[tcpBufSize];
@@ -106,7 +106,7 @@ void initSpeakerI2S()
 
     i2s_config_t cfg = {};
     cfg.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
-    cfg.sample_rate = SAMPLE_RATE / 2; // ALL_RIGHT stereo: rate * 2 effective, so /2 to get 16kHz mono
+    cfg.sample_rate = SAMPLE_RATE;
     cfg.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
     cfg.channel_format = I2S_CHANNEL_FMT_ALL_RIGHT;
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
@@ -173,6 +173,7 @@ void loadConfig()
     wifi_password = preferences.getString("wifi_pass", WIFI_PASSWORD);
     server_hostname = preferences.getString("server", DEFAULT_SERVER);
     speaker_volume = preferences.getUChar("volume", DEFAULT_VOLUME);
+    if (speaker_volume > DEFAULT_VOLUME) speaker_volume = DEFAULT_VOLUME; // clamp stale high values
     uint32_t savedIP = preferences.getUInt("server_ip", 0);
     preferences.end();
 
@@ -322,10 +323,24 @@ void opusDecodeTask(void *param)
             continue;
         }
 
-        for (int i = 0; i < num_samples; i++)
-            spkBuffer[totalSamples++] = applyVolume(opus_pcm_buffer[i]);
+        if (frameCount <= 20 && frame_len > 10)
+        {
+            int16_t mn = 32767, mx = -32768;
+            for (int i = 0; i < num_samples; i++) {
+                if (opus_pcm_buffer[i] < mn) mn = opus_pcm_buffer[i];
+                if (opus_pcm_buffer[i] > mx) mx = opus_pcm_buffer[i];
+            }
+            Serial.printf("Opus decoded: %d samples, range [%d, %d], vol=%d\n", num_samples, mn, mx, speaker_volume);
+        }
 
-        int writeThreshold = initialBufferFilled ? 320 : bufferThreshold;
+        for (int i = 0; i < num_samples; i++)
+        {
+            int16_t s = applyVolume(opus_pcm_buffer[i]);
+            spkBuffer[totalSamples++] = s; // L
+            spkBuffer[totalSamples++] = s; // R
+        }
+
+        int writeThreshold = initialBufferFilled ? 640 : bufferThreshold * 2;
         if (totalSamples >= writeThreshold)
         {
             if (!initialBufferFilled)
@@ -577,13 +592,15 @@ void loop()
             Serial.println("Playing local 440Hz tone for 2s...");
             if (currentMode != MODE_SPEAKER) initSpeakerI2S();
             const int dur_samples = SAMPLE_RATE * 2;
-            int16_t toneBuf[320];
+            int16_t toneBuf[640]; // stereo pairs
             for (int offset = 0; offset < dur_samples; offset += 320)
             {
                 for (int i = 0; i < 320; i++)
                 {
                     float t = (float)(offset + i) / SAMPLE_RATE;
-                    toneBuf[i] = (int16_t)(8000.0f * sinf(2.0f * 3.14159f * 440.0f * t));
+                    int16_t s = (int16_t)(8000.0f * sinf(2.0f * 3.14159f * 440.0f * t));
+                    toneBuf[i * 2] = s;
+                    toneBuf[i * 2 + 1] = s;
                 }
                 size_t w = 0;
                 i2s_write(I2S_NUM_0, toneBuf, sizeof(toneBuf), &w, portMAX_DELAY);
@@ -592,6 +609,21 @@ void loop()
             Serial.println("Tone done");
             break;
         }
+        case '+':
+        case '=':
+            speaker_volume = min(20, speaker_volume + 1);
+            Serial.printf("Volume: %d\n", speaker_volume);
+            preferences.begin("m5echo-cfg", false);
+            preferences.putUChar("volume", speaker_volume);
+            preferences.end();
+            break;
+        case '-':
+            speaker_volume = max(0, speaker_volume - 1);
+            Serial.printf("Volume: %d\n", speaker_volume);
+            preferences.begin("m5echo-cfg", false);
+            preferences.putUChar("volume", speaker_volume);
+            preferences.end();
+            break;
         case 'A':
         {
             udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);
@@ -667,8 +699,22 @@ void loop()
 
             xTaskCreatePinnedToCore(opusDecodeTask, "opusDec", 32768, NULL, 1, NULL, 1);
 
-            // Wait for task to finish (connection closed by bridge = end of call)
-            while (opusTaskRunning) delay(50);
+            // Wait for task to finish, but keep processing serial commands
+            while (opusTaskRunning)
+            {
+                if (Serial.available())
+                {
+                    char ch = Serial.read();
+                    if (ch == '+' || ch == '=') {
+                        speaker_volume = min(20, speaker_volume + 1);
+                        Serial.printf("Volume: %d\n", speaker_volume);
+                    } else if (ch == '-') {
+                        speaker_volume = max(0, speaker_volume - 1);
+                        Serial.printf("Volume: %d\n", speaker_volume);
+                    } else if (ch == 'r') ESP.restart();
+                }
+                delay(50);
+            }
         }
         // PCM audio (compression_type == 0)
         else
@@ -694,10 +740,11 @@ void loop()
                 for (size_t i = 0; i < bytesRead; i += 2)
                 {
                     int16_t sample16 = applyVolume((int16_t)((tcpBuffer[i + 1] << 8) | tcpBuffer[i]));
-                    spkBuffer[totalSamples++] = sample16;
+                    spkBuffer[totalSamples++] = sample16; // L
+                    spkBuffer[totalSamples++] = sample16; // R
                 }
 
-                if (initialBufferFilled || totalSamples >= bufferThreshold)
+                if (initialBufferFilled || totalSamples >= bufferThreshold * 2)
                 {
                     if (!initialBufferFilled)
                     {
