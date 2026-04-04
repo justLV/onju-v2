@@ -10,6 +10,7 @@ BUILD_DIR="$REPO/build"
 COMPILE_ONLY=false
 REGEN=false
 FORCE_COMPILE=false
+NO_MONITOR=false
 PORT=""
 
 for arg in "$@"; do
@@ -17,6 +18,7 @@ for arg in "$@"; do
         compile|compile-only) COMPILE_ONLY=true ;;
         --regen) REGEN=true; FORCE_COMPILE=true ;;
         --force) FORCE_COMPILE=true ;;
+        --no-monitor) NO_MONITOR=true ;;
         -h|--help)
             echo "Usage: flash.sh [options] [port]"
             echo "  flash.sh                        # Auto-detect port and upload"
@@ -24,6 +26,7 @@ for arg in "$@"; do
             echo "  flash.sh compile                # Compile only"
             echo "  flash.sh --regen                # Regenerate WiFi credentials"
             echo "  flash.sh --force                # Force recompile"
+            echo "  flash.sh --no-monitor           # Skip serial monitor after flash"
             exit 0 ;;
         /dev/*) PORT="$arg" ;;
         *) echo "Unknown option: $arg"; exit 1 ;;
@@ -129,6 +132,9 @@ arduino-cli upload --fqbn "$FQBN" --port "$PORT" --input-dir "$BUILD_DIR" m5_ech
 if [ $? -eq 0 ]; then
     echo ""
     echo "Upload successful!"
+    if [ "$NO_MONITOR" = true ]; then
+        exit 0
+    fi
     echo ""
     echo "Starting serial monitor..."
     sleep 2

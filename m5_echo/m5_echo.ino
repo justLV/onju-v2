@@ -41,6 +41,7 @@ volatile bool isPlaying = false;
 volatile bool interruptPlayback = false;
 volatile uint32_t forceMicUntil = 0; // serial 'M' command sets this
 uint8_t speaker_volume = DEFAULT_VOLUME;
+bool ledEnabled = true;
 
 enum I2SMode { MODE_NONE, MODE_MIC, MODE_SPEAKER };
 volatile I2SMode currentMode = MODE_NONE;
@@ -138,6 +139,7 @@ inline int16_t applyVolume(int16_t sample)
 
 void setLed(uint8_t r, uint8_t g, uint8_t b, uint8_t level, uint8_t fade)
 {
+    if (!ledEnabled) return;
     ledColor[0] = r;
     ledColor[1] = g;
     ledColor[2] = b;
@@ -173,16 +175,17 @@ void loadConfig()
     wifi_password = preferences.getString("wifi_pass", WIFI_PASSWORD);
     server_hostname = preferences.getString("server", DEFAULT_SERVER);
     speaker_volume = preferences.getUChar("volume", DEFAULT_VOLUME);
-    if (speaker_volume > DEFAULT_VOLUME) speaker_volume = DEFAULT_VOLUME; // clamp stale high values
+    if (speaker_volume > DEFAULT_VOLUME) speaker_volume = DEFAULT_VOLUME;
+    ledEnabled = preferences.getBool("led", true);
     uint32_t savedIP = preferences.getUInt("server_ip", 0);
     preferences.end();
 
     if (savedIP != 0)
         serverIP = IPAddress(savedIP);
 
-    Serial.printf("SSID: %s\nServer: %s\nVolume: %d\nSaved IP: %s\n",
+    Serial.printf("SSID: %s\nServer: %s\nVolume: %d\nLED: %s\nSaved IP: %s\n",
                   wifi_ssid.c_str(), server_hostname.c_str(), speaker_volume,
-                  serverIP.toString().c_str());
+                  ledEnabled ? "on" : "off", serverIP.toString().c_str());
 }
 
 void saveConfig()
@@ -352,7 +355,7 @@ void opusDecodeTask(void *param)
             size_t written = 0;
             i2s_write(I2S_NUM_0, (uint8_t *)spkBuffer, totalSamples * sizeof(int16_t), &written, portMAX_DELAY);
 
-            if (millis() - tic > 30)
+            if (ledEnabled && millis() - tic > 30)
             {
                 tic = millis();
                 uint32_t sum = 0;
@@ -496,6 +499,7 @@ void setup()
     // Network services
     udp.begin(3000);
     tcpServer.begin();
+    tcpServer.setNoDelay(true);
     MDNS.begin(HOST_NAME);
 
     // Resolve server — skip if we already have a saved IP from last session
@@ -624,6 +628,14 @@ void loop()
             preferences.putUChar("volume", speaker_volume);
             preferences.end();
             break;
+        case 'L':
+            ledEnabled = !ledEnabled;
+            if (!ledEnabled) { ledLevel = 0; led.setPixelColor(0, 0, 0, 0); led.show(); }
+            Serial.printf("LED: %s\n", ledEnabled ? "on" : "off");
+            preferences.begin("m5echo-cfg", false);
+            preferences.putBool("led", ledEnabled);
+            preferences.end();
+            break;
         case 'A':
         {
             udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);
@@ -711,6 +723,13 @@ void loop()
                     } else if (ch == '-') {
                         speaker_volume = max(0, speaker_volume - 1);
                         Serial.printf("Volume: %d\n", speaker_volume);
+                    } else if (ch == 'L') {
+                        ledEnabled = !ledEnabled;
+                        if (!ledEnabled) { ledLevel = 0; led.setPixelColor(0, 0, 0, 0); led.show(); }
+                        Serial.printf("LED: %s\n", ledEnabled ? "on" : "off");
+                        preferences.begin("m5echo-cfg", false);
+                        preferences.putBool("led", ledEnabled);
+                        preferences.end();
                     } else if (ch == 'r') ESP.restart();
                 }
                 delay(50);
