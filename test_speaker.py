@@ -1,68 +1,53 @@
 #!/usr/bin/env python3
 """
-Simple speaker test - send a WAV file to ESP32
-Uses same approach as working server implementation
+Send an audio file to an ESP32 device via Opus over TCP.
+
+Usage:
+    python test_speaker.py <ip> [audio_file]
+    python test_speaker.py 192.168.1.50 data/hello_imhere.wav
+    python test_speaker.py 192.168.1.50 recording.wav --volume 10
 """
-import socket
+import argparse
+import asyncio
 import time
+
 from pydub import AudioSegment
 
-import sys
-ESP32_IP = sys.argv[1] if len(sys.argv) > 1 else "192.168.68.97"
-ESP32_PORT = 3001
-WAV_FILE = "recording.wav"  # Use our test recording
+from pipeline.audio import opus_encode, opus_frames_to_tcp_payload
+from pipeline.protocol import send_audio
 
-print(f"Testing speaker with {WAV_FILE}")
-print(f"Connecting to {ESP32_IP}:{ESP32_PORT}...")
+SAMPLE_RATE = 16000
+OPUS_FRAME_SIZE = 320
 
-# Load and convert WAV (same as server does)
-audio = AudioSegment.from_wav(WAV_FILE)
-audio = audio.set_channels(1)       # Mono
-audio = audio.set_frame_rate(16000) # 16kHz
-audio = audio.set_sample_width(2)   # 16-bit
-pcm_data = audio.raw_data
 
-print(f"Audio loaded: {len(pcm_data):,} bytes ({len(pcm_data)/32000:.1f}s)")
+async def main():
+    parser = argparse.ArgumentParser(description="Send audio file to ESP32")
+    parser.add_argument("ip", help="Device IP address")
+    parser.add_argument("file", nargs="?", default="data/hello_imhere.wav", help="Audio file to send")
+    parser.add_argument("--port", type=int, default=3001, help="TCP port (default: 3001)")
+    parser.add_argument("--volume", type=int, default=8, help="Playback volume (default: 8)")
+    parser.add_argument("--mic-timeout", type=int, default=60, help="Mic timeout in seconds (default: 60)")
+    args = parser.parse_args()
 
-# Connect to ESP32
-sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-sock.settimeout(10.0)
-sock.connect((ESP32_IP, ESP32_PORT))
+    print(f"Loading {args.file}...")
+    audio = AudioSegment.from_file(args.file).set_channels(1).set_frame_rate(SAMPLE_RATE).set_sample_width(2)
+    pcm_data = audio.raw_data
+    duration = len(pcm_data) / (SAMPLE_RATE * 2)
+    print(f"  {duration:.1f}s, {len(pcm_data):,} bytes PCM")
 
-print("Connected! Sending header...")
+    print(f"Encoding Opus...")
+    t0 = time.time()
+    frames = opus_encode(pcm_data, SAMPLE_RATE, OPUS_FRAME_SIZE)
+    payload = opus_frames_to_tcp_payload(frames)
+    ratio = len(pcm_data) / len(payload)
+    print(f"  {len(frames)} frames, {len(payload):,} bytes ({ratio:.1f}x compression, {time.time()-t0:.2f}s)")
 
-# Send header (same as server)
-# header[0]   = 0xAA (audio command)
-# header[1:2] = mic timeout in seconds (60s)
-# header[3]   = volume (14)
-# header[4]   = LED fade (5)
-# header[5]   = unused
-mic_timeout = 60
-volume = 14
-fade = 5
+    print(f"Sending to {args.ip}:{args.port}...")
+    t0 = time.time()
+    await send_audio(args.ip, args.port, payload,
+                     mic_timeout=args.mic_timeout, volume=args.volume, fade=5)
+    print(f"  Sent in {time.time()-t0:.2f}s")
 
-header = bytes([
-    0xAA,
-    (mic_timeout & 0xFF00) >> 8,  # High byte
-    mic_timeout & 0xFF,            # Low byte
-    volume,
-    fade,
-    0
-])
 
-sock.send(header)
-print(f"Header sent: {list(header)}")
-
-# Send audio data
-print(f"Sending {len(pcm_data):,} bytes of audio...")
-start_time = time.time()
-sock.sendall(pcm_data)
-end_time = time.time()
-
-print(f"Audio sent in {end_time - start_time:.2f}s")
-print("Waiting for playback to complete...")
-
-time.sleep(2)
-sock.close()
-
-print("Done! Did you hear audio?")
+if __name__ == "__main__":
+    asyncio.run(main())

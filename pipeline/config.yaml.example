@@ -1,17 +1,21 @@
 asr:
-  url: "http://localhost:8100"
+  url: "http://localhost:8100"               # parakeet-asr-server
 
 conversation:
   backend: "local"                           # "local" or "managed" (e.g. OpenClaw)
 
   local:
-    base_url: "http://localhost:8080/v1"     # mlx_lm.server, Ollama, OpenRouter, OpenAI, etc.
-    api_key: "none"                          # set if using a hosted API
+    base_url: "http://localhost:8080/v1"     # mlx_lm.server, Ollama, OpenRouter, Gemini, etc.
+    api_key: "none"                          # set key or use ${ENV_VAR} reference
     model: "mlx-community/gemma-3-4b-it-qat-4bit"
     max_messages: 20
     max_tokens: 300
     system_prompt: "You are a helpful voice assistant. Keep responses concise (under 2 sentences)."
     persist_dir: "data/conversations"        # per-device message history (omit to disable)
+    # Gemini example:
+    # base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+    # api_key: "${GEMINI_API_KEY}"
+    # model: "gemini-3.1-flash-lite-preview"
 
   managed:
     base_url: "http://127.0.0.1:18789/v1"   # OpenClaw gateway
@@ -22,7 +26,7 @@ conversation:
     # provider_model: "anthropic/claude-opus-4-6"  # optional: override backend LLM
 
 tts:
-  backend: "qwen3"                           # "qwen3" (local) or "elevenlabs" (cloud)
+  backend: "elevenlabs"                      # "qwen3" (local) or "elevenlabs" (cloud)
   default_voice: "Rachel"
   qwen3:
     url: "http://localhost:8880"
@@ -30,14 +34,14 @@ tts:
     ref_audio: ""
     ref_text: ""
   elevenlabs:
-    api_key: ""
+    api_key: ""                              # your ElevenLabs API key
     default_voice: "Rachel"
     voices:
-      Rachel: "21m00Tcm4TlvDq8ikWAM"
+      Rachel: "21m00Tcm4TlvDq8ikWAM"        # add your voice IDs here
 
 vad:
-  threshold: 0.5
-  neg_threshold: 0.35
+  threshold: 0.5                             # speech onset probability
+  neg_threshold: 0.35                        # speech offset probability (hysteresis)
   silence_time: 1.5
   pre_buffer_s: 1.0
 
@@ -46,14 +50,15 @@ network:
   tcp_port: 3001
   multicast_group: "239.0.0.1"
   multicast_port: 12345
+  control_port: 3002
 
 audio:
   sample_rate: 16000
-  chunk_size: 512
-  opus_frame_size: 320
+  chunk_size: 480                            # 30ms at 16kHz
+  opus_frame_size: 320                       # 20ms at 16kHz
 
 device:
-  default_volume: 14
+  default_volume: 8
   default_mic_timeout: 60
   led_fade: 6
   led_power: 35

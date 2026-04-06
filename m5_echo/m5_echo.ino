@@ -49,6 +49,8 @@ volatile I2SMode currentMode = MODE_NONE;
 // Mic buffers
 int16_t micBuffer[SAMPLE_CHUNK];
 uint8_t compressedMicBuffer[SAMPLE_CHUNK];
+#define DC_OFFSET_ALPHA 0.001f
+float running_dc = 0.0f;
 
 // Speaker buffer (stereo-interleaved for ALL_RIGHT I2S)
 int16_t spkBuffer[8192];
@@ -441,14 +443,11 @@ void micTask(void *param)
                 Serial.printf("Mic: read %dB in %dms -> %d mono samples\n", bytesRead, elapsed, samplesRead);
             micPktCount++;
 
-            // DC offset removal + gain
-            int32_t dc_sum = 0;
-            for (int i = 0; i < samplesRead; i++)
-                dc_sum += micBuffer[i];
-            int16_t dc_offset = dc_sum / samplesRead;
+            // DC offset removal (IIR) + gain
             for (int i = 0; i < samplesRead; i++)
             {
-                int32_t s = ((int32_t)(micBuffer[i] - dc_offset)) * 8; // 8x gain for SPM1423
+                running_dc += DC_OFFSET_ALPHA * (micBuffer[i] - running_dc);
+                int32_t s = ((int32_t)(micBuffer[i] - (int16_t)running_dc)) * 8; // 8x gain for SPM1423
                 micBuffer[i] = (int16_t)constrain(s, -32768, 32767);
             }
 

@@ -18,9 +18,12 @@ class LocalConversation:
     def __init__(self, cfg: dict, device_id: str):
         self.cfg = cfg
         self.device_id = device_id
+        api_key = _resolve_env(cfg.get("api_key", "none"))
+        if api_key.startswith("${"):
+            log.warning(f"LLM api_key env var not resolved: {api_key} — is it exported?")
         self.client = AsyncOpenAI(
             base_url=cfg["base_url"],
-            api_key=_resolve_env(cfg.get("api_key", "none")),
+            api_key=api_key,
         )
         self.max_messages = cfg.get("max_messages", 20)
 

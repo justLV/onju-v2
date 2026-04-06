@@ -101,6 +101,7 @@ int16_t convertedMicBuffer[SAMPLE_CHUNK_SIZE]; // For converted values to be sen
 
 #define MAX_ALLOWED_OFFSET 16000
 #define MIC_OFFSET_AVERAGING_FRAMES 1
+#define DC_OFFSET_ALPHA 0.001f // IIR filter coefficient for DC offset tracking
 #define VAD_MIC_EXTEND 5000 // ensure there's always another 5s after last VAD detected by server to avoid cutting off while talking
 
 // Audio compression
@@ -894,6 +895,8 @@ void micTask(void *pvParameters)
         offset = 0;
     }
 
+    float running_dc = (float)offset; // IIR DC offset tracker
+
     int counter = 0;
     bool prevState = false;
 
@@ -919,19 +922,12 @@ void micTask(void *pvParameters)
             size_t bytesRead = 0;
             i2s_read(I2S_NUM, micBuffer, sizeof(micBuffer), &bytesRead, portMAX_DELAY);
 
-            // Convert to 16-bit and calculate DC offset
-            int32_t dc_sum = 0;
-            for (int i = 0; i < sizeof(micBuffer) / sizeof(micBuffer[0]); i++)
-            {
-                convertedMicBuffer[i] = static_cast<int16_t>(micBuffer[i] >> 14);
-                dc_sum += convertedMicBuffer[i];
-            }
-            int16_t dc_offset = dc_sum / SAMPLE_CHUNK_SIZE;
-
-            // Remove DC offset from all samples
+            // Convert to 16-bit and remove DC offset with IIR filter
             for (int i = 0; i < SAMPLE_CHUNK_SIZE; i++)
             {
-                convertedMicBuffer[i] -= dc_offset;
+                int16_t sample = static_cast<int16_t>(micBuffer[i] >> 14);
+                running_dc += DC_OFFSET_ALPHA * (sample - running_dc);
+                convertedMicBuffer[i] = sample - (int16_t)running_dc;
             }
 
             // Transmit audio

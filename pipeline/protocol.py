@@ -5,10 +5,10 @@ import struct
 log = logging.getLogger(__name__)
 
 
-async def send_tcp(ip: str, port: int, header: bytes, data: bytes | None = None, timeout: float = 60):
+async def send_tcp(ip: str, port: int, header: bytes, data: bytes | None = None, timeout: float = 5):
     try:
         reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(ip, port), timeout=5
+            asyncio.open_connection(ip, port), timeout=timeout
         )
         writer.write(header)
         if data:
@@ -16,10 +16,8 @@ async def send_tcp(ip: str, port: int, header: bytes, data: bytes | None = None,
         await writer.drain()
         writer.close()
         await writer.wait_closed()
-    except asyncio.TimeoutError:
-        log.error(f"TCP timeout to {ip}:{port}")
-    except Exception as e:
-        log.error(f"TCP error to {ip}:{port}: {e}")
+    except (asyncio.TimeoutError, ConnectionError, OSError):
+        pass  # non-critical, device may be busy
 
 
 async def send_audio(ip: str, port: int, opus_payload: bytes, mic_timeout: int = 60, volume: int = 14, fade: int = 6):
