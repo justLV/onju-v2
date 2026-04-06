@@ -1,30 +1,42 @@
 asr:
   url: "http://localhost:8100"
 
-llm:
-  base_url: "http://localhost:8080/v1"     # mlx_lm.server (or Ollama, OpenRouter, OpenAI, etc.)
-  api_key: "none"                          # set if using a hosted API
-  model: "mlx-community/gemma-3-4b-it-qat-4bit"
-  max_messages: 20
-  max_tokens: 300
-  system_prompt: "You are a helpful voice assistant. Keep responses concise (under 2 sentences)."
+conversation:
+  backend: "local"                           # "local" or "managed" (e.g. OpenClaw)
+
+  local:
+    base_url: "http://localhost:8080/v1"     # mlx_lm.server, Ollama, OpenRouter, OpenAI, etc.
+    api_key: "none"                          # set if using a hosted API
+    model: "mlx-community/gemma-3-4b-it-qat-4bit"
+    max_messages: 20
+    max_tokens: 300
+    system_prompt: "You are a helpful voice assistant. Keep responses concise (under 2 sentences)."
+
+  managed:
+    base_url: "http://127.0.0.1:18789/v1"   # OpenClaw gateway
+    api_key: "${OPENCLAW_GATEWAY_TOKEN}"     # env var reference
+    model: "openclaw/default"
+    max_tokens: 300
+    session_prefix: "onju-"                  # session key = prefix + device hostname
+    # provider_model: "anthropic/claude-opus-4-6"  # optional: override backend LLM
 
 tts:
-  backend: "qwen3"                         # "qwen3" (local) or "elevenlabs" (cloud)
+  backend: "qwen3"                           # "qwen3" (local) or "elevenlabs" (cloud)
+  default_voice: "Rachel"
   qwen3:
-    url: "http://localhost:8880"            # mlx-audio server (start with: python -m mlx_audio.server --port 8880)
+    url: "http://localhost:8880"
     model: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
-    ref_audio: ""                           # path to 3-10s reference clip for voice cloning
-    ref_text: ""                           # optional transcript of reference audio
+    ref_audio: ""
+    ref_text: ""
   elevenlabs:
-    api_key: ""                            # your ElevenLabs API key
+    api_key: ""
     default_voice: "Rachel"
     voices:
-      Rachel: "21m00Tcm4TlvDq8ikWAM"      # add your voice IDs here
+      Rachel: "21m00Tcm4TlvDq8ikWAM"
 
 vad:
-  threshold: 0.5          # speech onset probability
-  neg_threshold: 0.35     # speech offset probability (hysteresis)
+  threshold: 0.5
+  neg_threshold: 0.35
   silence_time: 1.5
   pre_buffer_s: 1.0
 
@@ -36,8 +48,8 @@ network:
 
 audio:
   sample_rate: 16000
-  chunk_size: 512       # 32ms at 16kHz (Silero VAD requirement)
-  opus_frame_size: 320  # 20ms at 16kHz
+  chunk_size: 512
+  opus_frame_size: 320
 
 device:
   default_volume: 14
@@ -45,7 +57,7 @@ device:
   led_fade: 6
   led_power: 35
   led_update_period: 0.2
-  persist_file: "data/devices.json"
+  registry_file: "data/devices.json"
   greeting_wav: "data/hello_imhere.wav"
 
 logging:

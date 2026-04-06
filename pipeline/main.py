@@ -15,9 +15,10 @@ import numpy as np
 import yaml
 
 from pipeline.audio import decode_ulaw, opus_encode, opus_frames_to_tcp_payload, pcm_to_wav
+from pipeline.conversation import create_backend
 from pipeline.device import Device, DeviceManager
 from pipeline.protocol import send_audio, send_led_blink, send_stop_listening
-from pipeline.services import asr, llm, tts
+from pipeline.services import asr, tts
 from pipeline.vad import VAD
 
 log = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ def load_config(path: str = None) -> dict:
 async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: asyncio.Queue):
     """Receive u-law audio from ESP32 devices, run VAD, queue complete utterances."""
     udp_port = config["network"]["udp_port"]
-    chunk_bytes = config["audio"]["chunk_size"]  # u-law: 1 byte per sample
+    chunk_bytes = config["audio"]["chunk_size"]
 
     loop = asyncio.get_event_loop()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -48,17 +49,14 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
         data, addr = await loop.sock_recvfrom(sock, chunk_bytes * 2)
         device = manager.get_by_ip(addr[0])
         if device is None and addr[0] == "127.0.0.1":
-            # Localhost test client: multicast announces from LAN IP but UDP comes from loopback
             device = manager.get_most_recent()
         if device is None:
             continue
 
         pcm = decode_ulaw(data)
 
-        # VAD
         utterance = device.vad.process_frame(pcm)
 
-        # LED visualization (proportional to speech probability)
         prob = device.vad.speech_prob
         if prob > 0.1:
             device.led_power = min(255, int(prob * 255))
@@ -99,7 +97,6 @@ async def multicast_listener(config: dict, manager: DeviceManager):
 
         device = manager.create_device(hostname, addr[0])
 
-        # Send greeting WAV as Opus
         greeting_path = dev_cfg.get("greeting_wav")
         if greeting_path and os.path.exists(greeting_path):
             try:
@@ -116,8 +113,8 @@ async def multicast_listener(config: dict, manager: DeviceManager):
                 log.error(f"Failed to send greeting to {hostname}: {e}")
 
 
-async def process_utterances(config: dict, manager: DeviceManager, utterance_queue: asyncio.Queue, llm_client):
-    """Process complete utterances: ASR -> LLM -> TTS -> Opus -> TCP."""
+async def process_utterances(config: dict, manager: DeviceManager, utterance_queue: asyncio.Queue):
+    """Process complete utterances: ASR -> Conversation -> TTS -> Opus -> TCP."""
     tcp_port = config["network"]["tcp_port"]
     dev_cfg = config["device"]
     no_speech_threshold = 0.45
@@ -126,7 +123,6 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
         device, audio_int16 = await utterance_queue.get()
 
         try:
-            # Stop mic while processing
             await send_stop_listening(device.ip, tcp_port)
 
             # ASR
@@ -137,18 +133,14 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
 
             if not text or (nsp is not None and nsp > no_speech_threshold):
                 log.info(f"ASR  (no speech, resuming mic)")
-                # Re-enable mic so device can keep listening
                 await send_audio(device.ip, tcp_port, b"",
                                  mic_timeout=dev_cfg["default_mic_timeout"],
                                  volume=0, fade=0)
                 continue
 
-            # LLM
-            device.sanitize_messages()
-            device.messages.append({"role": "user", "content": text})
-            response_text = await llm.chat(llm_client, device, config)
+            # Conversation (backend handles history, LLM call, pruning)
+            response_text = await device.conversation.send(text)
             device.last_response = response_text
-            device.prune_messages()
 
             log.info(f"LLM  {response_text}")
 
@@ -165,7 +157,6 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
 
         except Exception as e:
             log.error(f"Error processing utterance from {device.hostname}: {e}", exc_info=True)
-            # Re-enable mic after errors so device doesn't get stuck
             try:
                 await send_audio(device.ip, tcp_port, b"",
                                  mic_timeout=dev_cfg["default_mic_timeout"],
@@ -199,19 +190,15 @@ class ColorFormatter(logging.Formatter):
         return f"{self.GREY}{ts}{self.RESET}  {color}{msg}{self.RESET}"
 
 
-async def warmup(config: dict, llm_client):
-    """Validate LLM and TTS backends are reachable and preload models."""
-    log.info("Warming up LLM and TTS...")
+async def warmup(config: dict):
+    """Validate conversation backend and TTS are reachable."""
+    log.info("Warming up conversation backend and TTS...")
 
-    async def _warmup_llm():
+    async def _warmup_conversation():
         t0 = time.time()
         try:
-            resp = await llm_client.chat.completions.create(
-                model=config["llm"]["model"],
-                messages=[{"role": "user", "content": "Hi"}],
-                max_tokens=5,
-            )
-            text = resp.choices[0].message.content or ""
+            backend = create_backend(config, "_warmup")
+            text = await backend.send("Hi")
             if not text.strip():
                 log.error(f"LLM  warmup FAILED ({time.time() - t0:.1f}s): empty response")
             else:
@@ -223,7 +210,7 @@ async def warmup(config: dict, llm_client):
         t0 = time.time()
         try:
             pcm = await tts.synthesize("Hello.", "default", config)
-            duration_ms = len(pcm) / (16000 * 2) * 1000  # 16kHz 16-bit mono
+            duration_ms = len(pcm) / (16000 * 2) * 1000
             if duration_ms < 100:
                 log.error(f"TTS  warmup FAILED ({time.time() - t0:.1f}s): audio too short ({duration_ms:.0f}ms)")
             else:
@@ -231,7 +218,7 @@ async def warmup(config: dict, llm_client):
         except Exception as e:
             log.error(f"TTS  warmup FAILED ({time.time() - t0:.1f}s): {e}")
 
-    await asyncio.gather(_warmup_llm(), _warmup_tts())
+    await asyncio.gather(_warmup_conversation(), _warmup_tts())
     log.info("Warmup complete")
 
 
@@ -243,7 +230,6 @@ async def main(config_path: str = None, do_warmup: bool = False, persist: bool =
     handler.setFormatter(ColorFormatter())
     logging.basicConfig(level=log_level, handlers=[handler])
 
-    # Suppress noisy third-party loggers
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
@@ -251,10 +237,8 @@ async def main(config_path: str = None, do_warmup: bool = False, persist: bool =
     if persist:
         atexit.register(manager.save)
 
-    llm_client = llm.make_client(config)
-
     if do_warmup:
-        await warmup(config, llm_client)
+        await warmup(config)
 
     utterance_queue = asyncio.Queue()
 
@@ -262,7 +246,7 @@ async def main(config_path: str = None, do_warmup: bool = False, persist: bool =
     await asyncio.gather(
         udp_listener(config, manager, utterance_queue),
         multicast_listener(config, manager),
-        process_utterances(config, manager, utterance_queue, llm_client),
+        process_utterances(config, manager, utterance_queue),
     )
 
 
