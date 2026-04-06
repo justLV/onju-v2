@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import re
@@ -21,8 +22,14 @@ class LocalConversation:
             base_url=cfg["base_url"],
             api_key=_resolve_env(cfg.get("api_key", "none")),
         )
-        self.messages: list[dict] = [{"role": "system", "content": cfg["system_prompt"]}]
         self.max_messages = cfg.get("max_messages", 20)
+
+        self.persist_path = None
+        if persist_dir := cfg.get("persist_dir"):
+            os.makedirs(persist_dir, exist_ok=True)
+            self.persist_path = os.path.join(persist_dir, f"{device_id}.json")
+
+        self.messages: list[dict] = self._load() or [{"role": "system", "content": cfg["system_prompt"]}]
 
     async def send(self, user_text: str) -> str:
         self._sanitize()
@@ -42,12 +49,14 @@ class LocalConversation:
         text = response.choices[0].message.content or ""
         self.messages.append({"role": "assistant", "content": text})
         self._prune()
+        self.save()
 
         log.debug(f"[{self.device_id}] LLM: {text}")
         return text
 
     def reset(self) -> None:
         self.messages = [{"role": "system", "content": self.cfg["system_prompt"]}]
+        self.save()
 
     def get_messages(self) -> list[dict]:
         return self.messages
@@ -55,6 +64,24 @@ class LocalConversation:
     def set_messages(self, messages: list[dict]) -> None:
         self.messages = messages
         self._sanitize()
+
+    def save(self):
+        if not self.persist_path:
+            return
+        with open(self.persist_path, "w") as f:
+            json.dump(self.messages, f, indent=2)
+
+    def _load(self) -> list[dict] | None:
+        if not self.persist_path or not os.path.exists(self.persist_path):
+            return None
+        try:
+            with open(self.persist_path) as f:
+                messages = json.load(f)
+            log.info(f"[{self.device_id}] loaded {len(messages)-1} messages from {self.persist_path}")
+            return messages
+        except Exception as e:
+            log.warning(f"[{self.device_id}] failed to load {self.persist_path}: {e}")
+            return None
 
     def _prune(self):
         while len(self.messages) > self.max_messages:

@@ -11,6 +11,7 @@ conversation:
     max_messages: 20
     max_tokens: 300
     system_prompt: "You are a helpful voice assistant. Keep responses concise (under 2 sentences)."
+    persist_dir: "data/conversations"        # per-device message history (omit to disable)
 
   managed:
     base_url: "http://127.0.0.1:18789/v1"   # OpenClaw gateway
@@ -57,7 +58,6 @@ device:
   led_fade: 6
   led_power: 35
   led_update_period: 0.2
-  registry_file: "data/devices.json"
   greeting_wav: "data/hello_imhere.wav"
 
 logging:

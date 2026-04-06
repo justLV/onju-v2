@@ -1,11 +1,8 @@
 import argparse
 import asyncio
-import atexit
 import logging
 import os
 import socket
-import struct
-import sys
 import time
 import warnings
 
@@ -222,7 +219,7 @@ async def warmup(config: dict):
     log.info("Warmup complete")
 
 
-async def main(config_path: str = None, do_warmup: bool = False, persist: bool = False):
+async def main(config_path: str = None, do_warmup: bool = False):
     config = load_config(config_path)
 
     log_level = getattr(logging, config.get("logging", {}).get("level", "INFO"))
@@ -233,9 +230,7 @@ async def main(config_path: str = None, do_warmup: bool = False, persist: bool =
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-    manager = DeviceManager(config, persist=persist)
-    if persist:
-        atexit.register(manager.save)
+    manager = DeviceManager(config)
 
     if do_warmup:
         await warmup(config)
@@ -254,6 +249,5 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Voice pipeline server")
     parser.add_argument("config", nargs="?", default=None, help="Path to config YAML")
     parser.add_argument("--warmup", action="store_true", help="Warmup LLM and TTS on startup")
-    parser.add_argument("--persist", action="store_true", help="Persist device state across restarts")
     args = parser.parse_args()
-    asyncio.run(main(args.config, do_warmup=args.warmup, persist=args.persist))
+    asyncio.run(main(args.config, do_warmup=args.warmup))

@@ -1,6 +1,4 @@
-import json
 import logging
-import os
 import time
 
 from pipeline.conversation import ConversationBackend, create_backend
@@ -25,15 +23,12 @@ class Device:
         return {
             "hostname": self.hostname,
             "ip": self.ip,
-            "messages": self.conversation.get_messages(),
             "voice": self.voice,
         }
 
     @classmethod
     def from_dict(cls, data: dict, config: dict) -> "Device":
         conv = create_backend(config, data["hostname"])
-        if messages := data.get("messages"):
-            conv.set_messages(messages)
         return cls(
             data["hostname"],
             data["ip"],
@@ -43,18 +38,13 @@ class Device:
         )
 
     def __repr__(self):
-        msgs = self.conversation.get_messages()
-        count = max(0, len(msgs) - 1)
-        return f"<Device {self.hostname} {self.ip} [{count} msgs]>"
+        return f"<Device {self.hostname} {self.ip}>"
 
 
 class DeviceManager:
-    def __init__(self, config: dict, persist: bool = False):
+    def __init__(self, config: dict):
         self.config = config
         self.devices: dict[str, Device] = {}
-        self.persist_path = config["device"].get("registry_file", "data/devices.json") if persist else None
-        if self.persist_path:
-            self._load()
 
     def create_device(self, hostname: str, ip: str) -> Device:
         device = self.devices.get(hostname)
@@ -80,25 +70,3 @@ class DeviceManager:
         if self.devices:
             return next(reversed(self.devices.values()))
         return None
-
-    def save(self):
-        if not self.persist_path:
-            return
-        data = {k: v.to_dict() for k, v in self.devices.items()}
-        parent = os.path.dirname(self.persist_path)
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        with open(self.persist_path, "w") as f:
-            json.dump(data, f, indent=2)
-        log.info(f"Saved {len(self.devices)} devices to {self.persist_path}")
-
-    def _load(self):
-        if not os.path.exists(self.persist_path):
-            return
-        try:
-            with open(self.persist_path) as f:
-                data = json.load(f)
-            self.devices = {k: Device.from_dict(v, self.config) for k, v in data.items()}
-            log.info(f"Loaded {len(self.devices)} devices from {self.persist_path}")
-        except Exception as e:
-            log.warning(f"Failed to load {self.persist_path}: {e}")
