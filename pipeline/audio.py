@@ -79,4 +79,5 @@ def opus_frames_to_tcp_payload(opus_frames: list[bytes]) -> bytes:
     for frame in opus_frames:
         parts.append(struct.pack('>H', len(frame)))
         parts.append(frame)
+    parts.append(struct.pack('>H', 0))  # end-of-speech marker
     return b''.join(parts)

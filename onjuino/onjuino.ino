@@ -259,10 +259,13 @@ void setup()
     // mDNS: register ourselves and try to resolve server hostname
     MDNS.begin(desired_hostname);
 
-    if (server_hostname != DEFAULT_SERVER_HOSTNAME)
+    if (serverIP != IPAddress(0, 0, 0, 0))
+    {
+        Serial.printf("Using saved server IP: %s\n", serverIP.toString().c_str());
+    }
+    else if (server_hostname != DEFAULT_SERVER_HOSTNAME)
     {
         Serial.printf("Resolving server hostname: %s\n", server_hostname.c_str());
-        // Strip ".local" suffix if present — MDNS.queryHost expects bare hostname
         String queryHost = server_hostname;
         if (queryHost.endsWith(".local"))
         {
@@ -431,12 +434,29 @@ void loop()
     {
         Serial.println("New client connection: " + client.remoteIP().toString());
 
-        serverIP = client.remoteIP();
-
-        while (client.available() < 6) // TODO: timeout
+        if (serverIP != client.remoteIP())
         {
+            serverIP = client.remoteIP();
+            preferences.begin("onjuino-config", false);
+            preferences.putUInt("server_ip", (uint32_t)serverIP);
+            preferences.end();
+            Serial.println("Server IP saved to NVS");
+        }
+
+        uint32_t waitStart = millis();
+        bool headerReady = true;
+        while (client.available() < 6)
+        {
+            if ((millis() - waitStart) > 2000)
+            {
+                Serial.println("Header wait timeout");
+                client.stop();
+                headerReady = false;
+                break;
+            }
             delay(1);
         }
+        if (!headerReady) { delay(10); return; }
 
         uint8_t header[6];
         client.read(header, 6);
@@ -458,6 +478,12 @@ void loop()
         */
         if (header[0] == 0xAA)
         {
+            if (!callActive)
+            {
+                Serial.println("Ignoring audio - call not active");
+                client.stop();
+                return;
+            }
             leds.clear();
             leds.show();
             uint16_t timeout = header[1] << 8 | header[2];
@@ -680,8 +706,9 @@ void loop()
 
             isPlaying = false;
 
-            if (!PTT_MODE) {
+            if (!PTT_MODE && callActive) {
                 // VOX: enforce minimum 20s timeout after playback (server VAD extends when active)
+                // Skip if user double-tapped to end (callActive == false, mic_timeout already 0)
                 uint32_t timeout_ms = max((uint32_t)(timeout * 1000), (uint32_t)MIC_LISTEN_MS);
                 mic_timeout = millis() + timeout_ms;
                 Serial.println("Set mic_timeout to " + String(mic_timeout) + " (" + String(timeout_ms/1000) + "s)");
@@ -773,7 +800,7 @@ void opusDecodeTask(void *pvParameters)
     uint32_t tic = millis();
     uint32_t sum = 0;
 
-    while (client->connected())
+    while (client->connected() || client->available())
     {
         // Check for user interrupt
         if (interruptPlayback)
@@ -784,6 +811,7 @@ void opusDecodeTask(void *pvParameters)
         // Read 2-byte frame length
         if (client->available() < 2)
         {
+            if (!client->connected()) break;
             delay(1);
             continue;
         }
@@ -792,8 +820,13 @@ void opusDecodeTask(void *pvParameters)
         client->read(len_bytes, 2);
         uint16_t frame_len = (len_bytes[0] << 8) | len_bytes[1];
 
-        // Sanity check
-        if (frame_len == 0 || frame_len > OPUS_MAX_PACKET)
+        // frame_len == 0 is the end-of-speech signal from the bridge
+        if (frame_len == 0)
+        {
+            Serial.println("End of speech marker received");
+            break;
+        }
+        if (frame_len > OPUS_MAX_PACKET)
         {
             Serial.printf("Invalid Opus frame length: %d\n", frame_len);
             break;
@@ -863,6 +896,7 @@ void opusDecodeTask(void *pvParameters)
         }
     }
 
+    i2s_zero_dma_buffer(I2S_NUM);
     Serial.println("Opus decode task finished");
     opusTaskRunning = false;
     vTaskDelete(NULL);
@@ -1130,7 +1164,7 @@ void handleShortPress()
         interruptPlayback = true;
         isPlaying = false;
         mic_timeout = millis() + MIC_LISTEN_MS;
-        setLed(0, 255, 30, 255, 10);
+        setLed(255, 255, 255, 255, 8);
     }
     else
     {
@@ -1139,7 +1173,7 @@ void handleShortPress()
         if (!callActive)
         {
             callActive = true;
-            setLed(0, 255, 50, 100, 15); // quick subtle green flash = tap acknowledged
+            setLed(255, 255, 255, 255, 8); // bright white flash = tap acknowledged
             Serial.println("Call STARTING");
             // Server will send a slow green pulse (0xCC) once the call is actually connected
         }
@@ -1164,7 +1198,7 @@ void handleDoubleTap()
 
     callActive = false;
 
-    setLed(255, 100, 0, 200, 2); // slow amber pulse = call ended
+    setLed(255, 40, 0, 200, 2); // slow red-orange pulse = call ended
 
     Serial.println("Call ENDED");
 }
@@ -1211,19 +1245,24 @@ void enterConfigMode() {
 }
 
 void loadConfig() {
-    preferences.begin("onjuino-config", false);
+    preferences.begin("onjuino-config", true);
     wifi_ssid = preferences.getString("wifi_ssid", WIFI_SSID);
     wifi_password = preferences.getString("wifi_pass", WIFI_PASSWORD);
     server_hostname = preferences.getString("server", DEFAULT_SERVER_HOSTNAME);
     mic_timeout_default = preferences.getInt("mic_timeout", DEFAULT_MIC_TIMEOUT);
     speaker_volume = preferences.getUChar("volume", DEFAULT_SPEAKER_VOLUME);
+    uint32_t savedIP = preferences.getUInt("server_ip", 0);
     preferences.end();
+
+    if (savedIP != 0)
+        serverIP = IPAddress(savedIP);
 
     Serial.println("Loaded configuration:");
     Serial.println("SSID: " + wifi_ssid);
     Serial.println("Server: " + server_hostname);
     Serial.println("Mic Timeout: " + String(mic_timeout_default));
     Serial.println("Volume: " + String(speaker_volume));
+    Serial.println("Saved IP: " + serverIP.toString());
 }
 
 void saveConfig() {

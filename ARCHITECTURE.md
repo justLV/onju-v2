@@ -78,6 +78,8 @@ header[5]   = compression type: 0=PCM, 2=Opus
 ```
 Followed by length-prefixed Opus frames: `[2-byte big-endian length][Opus data]...`
 
+A zero-length frame (`0x00 0x00`) signals end of speech — the ESP32 exits `opusDecodeTask`, clears `isPlaying`, and re-enables the mic. The TCP connection may stay open for reuse.
+
 ### 0xBB — Set LEDs
 ```
 header[0]   = 0xBB

@@ -299,7 +299,13 @@ void opusDecodeTask(void *param)
             Serial.printf("Opus frame %d: len=%d\n", frameCount, frame_len);
         frameCount++;
 
-        if (frame_len == 0 || frame_len > OPUS_MAX_PACKET)
+        // frame_len == 0 is the end-of-speech signal from the bridge
+        if (frame_len == 0)
+        {
+            Serial.println("End of speech marker received");
+            break;
+        }
+        if (frame_len > OPUS_MAX_PACKET)
         {
             Serial.printf("Invalid Opus frame length: %d (0x%02X 0x%02X)\n",
                           frame_len, len_bytes[0], len_bytes[1]);
