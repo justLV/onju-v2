@@ -1207,6 +1207,7 @@ void handleDoubleTap()
             udp.beginPacket(serverIP, 3000);
             udp.write(&disc, 1);
             udp.endPacket();
+            if (i < 2) delay(5);
         }
     }
 
