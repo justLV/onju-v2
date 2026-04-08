@@ -810,16 +810,25 @@ void opusDecodeTask(void *pvParameters)
             Serial.println("Playback interrupted by user");
             break;
         }
-        // Read 2-byte frame length
-        if (client->available() < 2)
-        {
-            if (!client->connected()) break;
-            delay(1);
-            continue;
-        }
-
+        // Read 2-byte frame length (ensure both bytes are read)
         uint8_t len_bytes[2];
-        client->read(len_bytes, 2);
+        size_t len_read = 0;
+        while (len_read < 2)
+        {
+            if (client->available() > 0)
+            {
+                len_read += client->read(len_bytes + len_read, 2 - len_read);
+            }
+            else if (!client->connected())
+            {
+                break;
+            }
+            else
+            {
+                delay(1);
+            }
+        }
+        if (len_read < 2) break;
         uint16_t frame_len = (len_bytes[0] << 8) | len_bytes[1];
 
         // frame_len == 0 is the end-of-speech signal from the bridge
@@ -830,7 +839,9 @@ void opusDecodeTask(void *pvParameters)
         }
         if (frame_len > OPUS_MAX_PACKET)
         {
-            Serial.printf("Invalid Opus frame length: %d\n", frame_len);
+            Serial.printf("Invalid Opus frame length: %d, skipping rest of stream\n", frame_len);
+            // Drain remaining TCP data to avoid corrupting next connection
+            while (client->available()) client->read();
             break;
         }
 
