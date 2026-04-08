@@ -46,8 +46,9 @@ async def send_led_blink(ip: str, port: int, intensity: int, r: int = 255, g: in
     await send_tcp(ip, port, header, timeout=0.1)
 
 
-async def send_stop_listening(ip: str, port: int):
+async def send_stop_listening(ip: str, port: int, hold_s: int = 30):
     # header[0]   0xDD for mic timeout
-    # header[1:2] timeout = 0 (stop)
-    header = bytes([0xDD, 0, 0, 0, 0, 0])
+    # header[1:2] timeout in seconds — nonzero to keep callActive alive
+    #             on the device while server processes LLM + TTS
+    header = bytes([0xDD, (hold_s >> 8) & 0xFF, hold_s & 0xFF, 0, 0, 0])
     await send_tcp(ip, port, header, timeout=0.2)

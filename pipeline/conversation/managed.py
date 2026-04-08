@@ -21,13 +21,12 @@ class ManagedConversation:
     def __init__(self, cfg: dict, device_id: str):
         self.cfg = cfg
         self.device_id = device_id
-        session_prefix = cfg.get("session_prefix", "onju-")
-        self.session_key = f"{session_prefix}{device_id}"
+        self.message_channel = cfg.get("message_channel", "onju-voice")
         self.client = AsyncOpenAI(
             base_url=cfg["base_url"],
             api_key=_resolve_env(cfg.get("api_key", "none")),
             default_headers={
-                "x-openclaw-session-key": self.session_key,
+                "x-openclaw-message-channel": self.message_channel,
             },
         )
 
@@ -36,6 +35,7 @@ class ManagedConversation:
             model=self.cfg.get("model", "openclaw/default"),
             messages=[{"role": "user", "content": user_text}],
             max_tokens=self.cfg.get("max_tokens", 300),
+            user=self.device_id,
         )
 
         extra_headers = {}

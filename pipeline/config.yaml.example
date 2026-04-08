@@ -22,7 +22,7 @@ conversation:
     api_key: "${OPENCLAW_GATEWAY_TOKEN}"     # env var reference
     model: "openclaw/default"
     max_tokens: 300
-    session_prefix: "onju-"                  # session key = prefix + device hostname
+    message_channel: "onju-voice"            # x-openclaw-message-channel header
     # provider_model: "anthropic/claude-opus-4-6"  # optional: override backend LLM
 
 tts:

@@ -296,11 +296,13 @@ void setup()
     udp.write(reinterpret_cast<const uint8_t *>(mcast_string.c_str()), mcast_string.length());
     udp.endPacket();
 
-    // PTT: auto-start call on boot — bridge will start Sesame session on discovery
+    callActive = true;
     if (PTT_MODE) {
-        callActive = true;
         Serial.println("PTT mode: call auto-started on boot");
         setLed(0, 100, 255, 200, 3); // blue pulse = PTT idle, waiting for bridge
+    } else {
+        Serial.println("VOX mode: call active on boot");
+        mic_timeout = millis() + MIC_LISTEN_MS;
     }
 
     i2s_driver_install(I2S_NUM, &i2s_config, 0, NULL);
@@ -769,7 +771,7 @@ void loop()
         {
             Serial.println("Received mic timeout command (0xDD)");
             uint16_t timeout = header[1] << 8 | header[2];
-            mic_timeout = millis() + timeout;
+            mic_timeout = millis() + (uint32_t)timeout * 1000;
             client.stop();
         }
         else
@@ -948,7 +950,7 @@ void micTask(void *pvParameters)
             if (prevState)
             {
                 Serial.println("Timeout reached");
-                callActive = false;
+                // Don't set callActive = false — only double-tap should end the call
             }
         }
         else

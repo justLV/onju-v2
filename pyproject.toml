@@ -12,7 +12,11 @@ dependencies = [
     "PyYAML",
     "scipy",
     "silero-vad",
+    "pyserial",
 ]
+
+[tool.setuptools.packages.find]
+include = ["pipeline*"]
 
 [project.optional-dependencies]
 tts-local = ["mlx-audio>=0.3.1"]
