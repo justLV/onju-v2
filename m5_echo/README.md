@@ -9,20 +9,20 @@ Firmware for the [M5Stack ATOM Echo](https://shop.m5stack.com/products/atom-echo
 | **Board** | ESP32-S3 (custom PCB) | ESP32-PICO-D4 (M5Stack ATOM Echo) |
 | **Mic** | Standard I2S (separate ADC) | PDM (SPM1423, on-chip) |
 | **Speaker** | MAX98357A, 6 NeoPixel LEDs | NS4168, 1 SK6812 LED |
-| **Interaction** | Capacitive touch: tap to start call, double-tap to end | Physical button: hold to talk, release to listen |
-| **Mic control** | VAD-driven timeout (server extends via 0xDD) | Push-to-talk only - mic active while button held |
-| **Call lifecycle** | Manual start/end via touch | Auto-starts on boot, persistent until bridge disconnects |
+| **Interaction** | Capacitive touch: tap to wake, VAD detects end of speech | Physical button: hold to talk, release to listen |
+| **Mic control** | VAD-driven (server detects silence and processes) | Push-to-talk only - mic active while button held |
+| **Call lifecycle** | Tap to activate, VAD handles turn-taking | Auto-starts on boot, persistent until server disconnects |
 | **PSRAM** | Yes (2MB, large playback buffer) | No (smaller buffers, more DMA buffers to compensate) |
 | **Opus** | Full encoder + decoder | Decoder only (mic sends mu-law) |
 | **I2S** | Single config for simultaneous TX+RX | Switches between PDM RX (mic) and I2S TX (speaker) |
 
 ## PTT behavior
 
-- **Boot**: Connects to WiFi, announces on multicast with `PTT` flag. Bridge auto-starts a call and opens a persistent TCP connection.
-- **Idle**: Bridge streams Opus audio over the persistent TCP connection. Device decodes and plays through the speaker.
+- **Boot**: Connects to WiFi, announces on multicast with `PTT` flag. Server auto-starts a call and opens a persistent TCP connection.
+- **Idle**: Server streams Opus audio over the persistent TCP connection. Device decodes and plays through the speaker.
 - **Button press**: Immediately stops speaker playback (I2S switches to PDM mic mode). Opus task keeps reading the TCP stream but discards frames. Mic audio is captured, mu-law encoded, and sent via UDP.
 - **Button release**: I2S switches back to speaker mode. Opus task resumes decoding and playing. The TCP connection stays alive throughout - no reconnection needed between turns.
-- **Call end**: Bridge closes the TCP connection. Device returns to idle, waiting for a new connection.
+- **Call end**: Server closes the TCP connection. Device returns to idle, waiting for a new connection.
 
 ## Hardware pin mapping (ATOM Echo)
 
@@ -51,7 +51,7 @@ Uses the same TCP/UDP protocol as onjuino:
 - **TCP 3001**: Server commands (0xAA audio, 0xBB LED set, 0xCC LED blink, 0xDD mic timeout)
 - **Multicast**: Device announces as `"m5-echo m5echo PTT"` on the configured multicast group
 
-The `PTT` token in the multicast announcement tells the bridge to auto-start a call on discovery and keep the TCP connection open persistently (no silence-based disconnection).
+The `PTT` token in the multicast announcement tells the server to auto-start a call on discovery and keep the TCP connection open persistently (no silence-based disconnection).
 
 ## Serial commands
 
