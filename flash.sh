@@ -145,7 +145,7 @@ echo ""
 # -------------------------------------------------------
 NEEDS_COMPILE=true
 if [ "$FORCE_COMPILE" = false ] && [ -d "$BUILD_DIR" ]; then
-    BIN=$(find "$BUILD_DIR" -name "*.bin" -maxdepth 1 2>/dev/null | head -1)
+    BIN=$(find "$BUILD_DIR" -name "*.ino.bin" -maxdepth 1 2>/dev/null | head -1)
     if [ -n "$BIN" ]; then
         NEWER=$(find "$PROJECT_DIR" -maxdepth 1 \( -name "*.ino" -o -name "*.h" \) -newer "$BIN" 2>/dev/null | head -1)
         [ -z "$NEWER" ] && NEEDS_COMPILE=false
