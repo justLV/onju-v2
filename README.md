@@ -42,9 +42,9 @@ Both targets use the same network protocol and connect to the same server. See t
 ```
                 ESP32 Device                              Server Pipeline
   ┌──────────────────────────────┐       ┌──────────────────────────────────────┐
-  │  Mic > I2S RX > mu-law ========UDP 3000===> mu-law decode > VAD > ASR       │
+  │  Mic > I2S RX > mu-law =======UDP 3000===> mu-law decode > VAD > ASR        │
   │                              │       │                                      │
-  │  Speaker < I2S TX < Opus <===TCP 3001<=== Opus encode < TTS < LLM          │
+  │  Speaker < I2S TX < Opus <===TCP 3001<=== Opus encode < TTS < LLM           │
   └──────────────────────────────┘       └──────────────────────────────────────┘
 ```
 
