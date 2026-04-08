@@ -91,7 +91,7 @@ Irrespective of what you use for development, the quickest & least error prone s
 * Add the ESP32 boards as detailed [here](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html)
 (TL;DR add `https://espressif.github.io/arduino-esp32/package_esp32_index.json` to `Preferences > Additional Boards Manager URL’s`)
 * Under Boards Manager, install “esp32” by Espressif Systems
-* Under Library Manager, install “Adafruit NeoPixel Library” 
+* Under Library Manager, install “Adafruit NeoPixel Library” and “esp32_opus” by sh123 (the `flash.sh` script installs these automatically)
 * Clone this repo to `Documents/Arduino` for simplicity. 
 * Add your WiFi credentials to `credentials.h`
 * Run `bash setup-git-hash.sh` to add a header with the git-hash (optional). This will then automatically update after commits, and help track the firmware that your devices are running from the server side.
@@ -104,22 +104,28 @@ Irrespective of what you use for development, the quickest & least error prone s
 * Build and upload
 * If not reset, press the reset button. In Serial Monitor you can also send `r` to reset the device (assuming it is already booted)
 
-### Using flash_firmware.sh
+### Using flash.sh
 
-For command-line compilation and flashing, use the `flash_firmware.sh` script:
+For command-line compilation and flashing, use the `flash.sh` script:
 
 ```bash
 # Compile only (verify code compiles without ESP32 connected)
-./flash_firmware.sh compile
+./flash.sh compile
 
-# Auto-detect ESP32 and flash
-./flash_firmware.sh
+# Auto-detect ESP32 and flash (defaults to onjuino)
+./flash.sh
+
+# Flash m5_echo target
+./flash.sh m5_echo
 
 # Flash to specific port
-./flash_firmware.sh /dev/cu.usbmodem1234
+./flash.sh /dev/cu.usbmodem1234
+
+# Regenerate WiFi credentials
+./flash.sh --regen
 ```
 
-**Note:** Always run `./flash_firmware.sh compile` after making changes to `onjuino.ino` to verify your code compiles before committing.
+**Note:** Always run `./flash.sh compile` after making changes to `onjuino.ino` to verify your code compiles before committing.
 
 ## 🧩 Hardware 
 
