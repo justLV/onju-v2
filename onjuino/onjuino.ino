@@ -769,7 +769,6 @@ void loop()
             Serial.println("Received mic timeout command (0xDD)");
             uint16_t timeout = header[1] << 8 | header[2];
             mic_timeout = millis() + timeout;
-            setLed(0, 255, 50, 100, 5); // TODO add better thinking animation - currently just green pulse to indicate transcribe is done
             client.stop();
         }
         else
