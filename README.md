@@ -1,12 +1,12 @@
 # Onju Voice v2 (OnjuClaw 🍐🦞 ?)
 
-Enable multiple "Google Home" speakers to connect to a Mac Mini (or other local server) for talking to your agent(s) over your local WiFi.
+Enable multiple "Google Home" speakers to connect to your Mac Mini for talking to your agent(s).
 
 This repo consists of:
-* A custom PCB designed as a drop-in replacement to the original Google Nest Mini (2nd gen), using the ESP32-S3 for audio processing and WiFi connectivity
-* An async server pipeline handling ASR -> TTS from multiple devices on the same network to be compatible with any LLM or agent platforms like OpenClaw 🦞
+* An async server pipeline handling ASR -> TTS from multiple devices using any LLM or agent platforms like OpenClaw 🦞
+* Hardware designs for a drop-in replacement PCB to the original Google Nest Mini (2nd gen), using the ESP32-S3 for audio processing and WiFi connectivity
 
-> This is the successor to [onju-voice](https://github.com/justLV/onju-voice). The original repo remains available as a reference but is no longer actively maintained.
+> This is an upgraded version of [onju-voice](https://github.com/justLV/onju-voice) as DEMO'd [here](https://x.com/justLV/status/1681377298308820992?s=20)!.
 
 <img src="images/header_white.jpg" width="960">
 
