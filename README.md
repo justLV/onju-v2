@@ -14,7 +14,7 @@ This repo consists of:
 
 * **OpenClaw managed backend** 🦞 -- delegate conversation history and session management to an [OpenClaw](https://github.com/openclaw) gateway for centralized, multi-device orchestration
 * **Opus compression** -- 14-16x downstream compression (server to speaker) for better audio quality over WiFi
-* **Streaming-ready architecture** -- designed for sentence-level TTS streaming and agentic tool-calling loops (see [Voice Agent Architecture](#voice-agent-architecture))
+* **Streaming-ready architecture** -- designed for sentence-level TTS streaming and agentic tool-calling loops
 * **Modular async pipeline** -- replaced the monolithic server with a pluggable architecture for ASR, LLM, and TTS backends etc.
 * **Any LLM** -- works with any OpenAI-compatible API (Ollama, mlx_lm, Gemini, OpenRouter, Claude, etc.)
 * **Pluggable TTS** -- ElevenLabs (recommended) or local via [mlx-audio](https://github.com/lucasnewman/mlx-audio) for fully offline operation
@@ -42,9 +42,9 @@ Both targets use the same network protocol and connect to the same server. See t
 ```
                 ESP32 Device                              Server Pipeline
   ┌──────────────────────────────┐       ┌──────────────────────────────────────┐
-  │  Mic ─→ I2S RX ─→ mu-law ──────UDP 3000──→ mu-law decode ─→ VAD ─→ ASR    │
+  │  Mic > I2S RX > mu-law ========UDP 3000===> mu-law decode > VAD > ASR       │
   │                              │       │                                      │
-  │  Speaker ←─ I2S TX ←─ Opus ←──TCP 3001──← Opus encode ←─ TTS ←─ LLM      │
+  │  Speaker < I2S TX < Opus <===TCP 3001<=== Opus encode < TTS < LLM          │
   └──────────────────────────────┘       └──────────────────────────────────────┘
 ```
 
@@ -171,7 +171,7 @@ For Arduino IDE users: select **ESP32S3 Dev Module** (onjuino) or **ESP32 Dev Mo
   <img src="images/render.png" width="48%" />
 </p>
 
-[Preview schematics & PCB](https://365.altium.com/files/77C755F4-7195-4B29-93AA-0C10A2471AC3) | [Order from PCBWay](https://www.pcbway.com/project/shareproject/Onju_Voice_d33625a1.html) | Altium source files and schematics in `hardware/`. You can order these PCBA's directly from PCBWay [here](https://www.pcbway.com/project/shareproject/Onju_Voice_d33625a1.html).
+[Preview schematics & PCB](https://365.altium.com/files/77C755F4-7195-4B29-93AA-0C10A2471AC3) | [Order from PCBWay](https://www.pcbway.com/project/shareproject/Onju_Voice_d33625a1.html) | Altium source files and schematics in `hardware/`.
 
 If you don't have a custom PCB, you can use the [M5Stack ATOM Echo](https://shop.m5stack.com/products/atom-echo-smart-speaker-dev-kit). I'd recommend adding a Battery ([Biscuit](https://www.youtube.com/watch?v=OMg3epr53Ns)) Base ([link](https://shop.m5stack.com/products/atomic-battery-base-200mah))
 
@@ -213,16 +213,6 @@ python test_mic.py --duration 10
 
 # Serial monitor (auto-detects USB port)
 python serial_monitor.py test.wav
-```
-
-## Voice agent architecture
-
-The current pipeline implements a simple listen-transcribe-respond-speak loop. The architecture is designed to evolve toward a voice-native agent loop where the LLM can call tools, narrate results, and stream speech in real-time:
-
-```
-LLM (streaming) ──→ sentence buffer ──→ TTS ──→ Opus encode ──→ ESP32
-       │
-       └──→ tool calls ──→ execute ──→ feed results back ──→ LLM continues
 ```
 
 ## UART debug commands
