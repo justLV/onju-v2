@@ -847,7 +847,7 @@ void opusDecodeTask(void *pvParameters)
 
         // Read Opus frame
         size_t bytes_read = 0;
-        while (bytes_read < frame_len && client->connected())
+        while (bytes_read < frame_len && (client->connected() || client->available()))
         {
             int avail = client->available();
             if (avail > 0)
@@ -860,6 +860,7 @@ void opusDecodeTask(void *pvParameters)
                 delay(1);
             }
         }
+        if (bytes_read < frame_len) break;  // incomplete frame after disconnect
 
         // Decode Opus frame
         int num_samples = opus_decode(opus_decoder, opus_packet_buffer, frame_len,

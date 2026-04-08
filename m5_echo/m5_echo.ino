@@ -324,6 +324,7 @@ void opusDecodeTask(void *param)
             }
             else delay(1);
         }
+        if (bytes_read < frame_len) break;  // incomplete frame after disconnect
 
         // Decode
         int num_samples = opus_decode(opus_decoder, opus_packet_buffer, frame_len,
