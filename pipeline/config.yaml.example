@@ -2,7 +2,15 @@ asr:
   url: "http://localhost:8100"               # parakeet-asr-server
 
 conversation:
-  backend: "local"                           # "local" or "managed" (e.g. OpenClaw)
+  backend: "managed"                           # "managed" (e.g. OpenClaw) or "local" (conversational only)
+
+  managed:
+    base_url: "http://127.0.0.1:18789/v1"   # OpenClaw gateway
+    api_key: "${OPENCLAW_GATEWAY_TOKEN}"     # env var reference
+    model: "openclaw/default"
+    max_tokens: 300
+    message_channel: "onju-voice"            # x-openclaw-message-channel header
+    # provider_model: "anthropic/claude-opus-4-6"  # optional: override backend LLM
 
   local:
     base_url: "https://openrouter.ai/api/v1"  # OpenRouter, Ollama, mlx_lm.server, Gemini, etc.
@@ -17,18 +25,9 @@ conversation:
     # api_key: "none"
     # model: "gemma4:e4b"
 
-  managed:
-    base_url: "http://127.0.0.1:18789/v1"   # OpenClaw gateway
-    api_key: "${OPENCLAW_GATEWAY_TOKEN}"     # env var reference
-    model: "openclaw/default"
-    max_tokens: 300
-    message_channel: "onju-voice"            # x-openclaw-message-channel header
-    # provider_model: "anthropic/claude-opus-4-6"  # optional: override backend LLM
-
 tts:
-  backend: "elevenlabs"                      # "qwen3" (local) or "elevenlabs" (cloud)
-  default_voice: "Rachel"
-  qwen3:
+  backend: "elevenlabs"                      # "local" or "elevenlabs" (cloud)
+  local:
     url: "http://localhost:8880"
     model: "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-4bit"
     ref_audio: ""
@@ -58,11 +57,12 @@ audio:
   opus_frame_size: 320                       # 20ms at 16kHz
 
 device:
-  default_volume: 8
+  default_volume: 15
   default_mic_timeout: 60
   led_fade: 6
-  led_power: 35
+  led_power: 60
   led_update_period: 0.2
+  greeting: false
   greeting_wav: "data/hello_imhere.wav"
 
 logging:

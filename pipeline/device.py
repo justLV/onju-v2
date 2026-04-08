@@ -15,7 +15,7 @@ class Device:
         self.ip = ip
         self.config = config
         self.conversation = conversation
-        self.voice = voice or config["tts"].get("default_voice", "Rachel")
+        self.voice = voice or config["tts"].get("elevenlabs", {}).get("default_voice", "Rachel")
         self.ptt = ptt
         self.vad = None if ptt else VAD(config)
         self.last_response: str | None = None
