@@ -1198,6 +1198,18 @@ void handleDoubleTap()
 
     callActive = false;
 
+    // Send disconnect signal to bridge (single byte 0xFF via UDP, send 3x for reliability)
+    if (serverIP != IPAddress(0, 0, 0, 0))
+    {
+        uint8_t disc = 0xFF;
+        for (int i = 0; i < 3; i++)
+        {
+            udp.beginPacket(serverIP, 3000);
+            udp.write(&disc, 1);
+            udp.endPacket();
+        }
+    }
+
     setLed(255, 40, 0, 200, 2); // slow red-orange pulse = call ended
 
     Serial.println("Call ENDED");
