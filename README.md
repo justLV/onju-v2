@@ -28,7 +28,7 @@ This repo consists of:
 | | Onjuino (custom PCB) | M5Stack ATOM Echo |
 |---|---|---|
 | **Board** | ESP32-S3 | ESP32-PICO-D4 |
-| **Interaction** | Capacitive touch: tap to start, double-tap to end | Physical button: hold to talk |
+| **Interaction** | Capacitive touch: tap to start (uses VAD to end) | Physical button: hold to talk |
 | **Mic** | I2S (INMP441) | PDM (SPM1423) |
 | **Speaker** | MAX98357A, 6 NeoPixel LEDs | NS4168, 1 SK6812 LED |
 | **PSRAM** | Yes (2MB playback buffer) | No (smaller buffers) |
