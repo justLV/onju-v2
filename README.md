@@ -1,174 +1,244 @@
-# Onju Voice 🍐🔈
+# Onju Voice v2 
 
-💫 [DEMO's](https://twitter.com/justLV)
+Enable multiple "Google Home" speakers to connect to a Mac Mini (or other local server) for talking to your agent(s) over your local WiFi.
 
-A hackable AI home assistant platform using the Google Nest Mini (2nd gen) form factor, consisting of:
-* a custom PCB designed to be a drop-in replacement to the original, using the ESP32-S3 for audio processing
-* a server for handling the transcription, response generation and Text-to-Speech from multiple devices on the same network
+This repo consists of:
+* A custom PCB designed as a drop-in replacement to the original Google Nest Mini (2nd gen), using the ESP32-S3 for audio processing and WiFi connectivity
+* An async server pipeline handling ASR -> TTS from multiple devices on the same network to be compatible with any LLM or agent platforms like OpenClaw 🦞
 
-_(This repo focuses on the experimental conversational LLM aspect to replicate some functionality shown in the demos, and not as a full fledged replacement to a home assistant. This is not being actively maintained, but I've released all source code and design files for anyone else to pick up from here.)_
+> This is the successor to [onju-voice](https://github.com/justLV/onju-voice). The original repo remains available as a reference but is no longer actively maintained.
 
 <img src="images/header_white.jpg" width="960">
 
-## Overview
+## What's new in v2
 
-This repo contains firmware, server code and some example applications, intended to be as accessible as possible for getting up and running i.e.:
-* [Firmware](#-firmware) for the custom PCB can be programmed using the Arduino IDE and a USB cable (installation of ESP-IDF not required)
-* [Server code](#%EF%B8%8F-server) has minimal requirements besides running Whisper locally, and should be able to run on most devices that you can leave plugged in whether MacOS / Linux / Win etc.
-* [Hardware](#-hardware) can be ordered from [PCBWay](https://www.pcbway.com/project/shareproject/Onju_Voice_d33625a1.html) and Altium design files are included
-<img src="images/rich.png">
+* **OpenClaw managed backend** 🦞 -- delegate conversation history and session management to an [OpenClaw](https://github.com/openclaw) gateway for centralized, multi-device orchestration
+* **Opus compression** -- 14-16x downstream compression (server to speaker) for better audio quality over WiFi
+* **Streaming-ready architecture** -- designed for sentence-level TTS streaming and agentic tool-calling loops (see [Voice Agent Architecture](#voice-agent-architecture))
+* **Modular async pipeline** -- replaced the monolithic server with a pluggable architecture for ASR, LLM, and TTS backends etc.
+* **Any LLM** -- works with any OpenAI-compatible API (Ollama, mlx_lm, Gemini, OpenRouter, Claude, etc.)
+* **Pluggable TTS** -- ElevenLabs (recommended) or local via [mlx-audio](https://github.com/lucasnewman/mlx-audio) for fully offline operation
+* **Silero VAD** -- server-side voice activity detection with configurable thresholds, replacing webrtcvad
+* **VAD-aware interruption** -- tap to interrupt playback and start speaking immediately
+* **M5 Echo support** -- get started with a [$13 dev kit](https://shop.m5stack.com/products/atom-echo-smart-speaker-dev-kit) instead of ordering a custom PCB
+* **One-command flashing** -- `./flash.sh` handles compilation, WiFi credential generation (from macOS Keychain), and upload. No Arduino IDE or manual configuration required
 
-## Example applications
-* 📩 Querying and replying to messages (using a [custom Maubot plugin](https://github.com/justLV/onju-voice-maubot) & Beeper)
-* 💡 Light control with [Home Assistant](#-home-assistant)
-* 📝 Adding and retrieving notes/memos for the LLM to craft a response with
+## Supported devices
 
-*Not included:*
-* 👥 Multiple voice characters. I’ll leave it to the user to clone voices as they deem fair use. Also from experience LLM’s < GPT4 don’t consistently enough follow instructions to reliably respond in different characters AND perform multiple function calling with complicated prompts.
+| | Onjuino (custom PCB) | M5Stack ATOM Echo |
+|---|---|---|
+| **Board** | ESP32-S3 | ESP32-PICO-D4 |
+| **Interaction** | Capacitive touch: tap to start, double-tap to end | Physical button: hold to talk |
+| **Mic** | I2S (INMP441) | PDM (SPM1423) |
+| **Speaker** | MAX98357A, 6 NeoPixel LEDs | NS4168, 1 SK6812 LED |
+| **PSRAM** | Yes (2MB playback buffer) | No (smaller buffers) |
+| **Audio upstream** | mu-law 16kHz UDP (16 KB/s) | mu-law 16kHz UDP (16 KB/s) |
+| **Audio downstream** | Opus 16kHz TCP (~1.5 KB/s) | Opus 16kHz TCP (~1.5 KB/s) |
 
-## Current features of the device <> server platform
-* Auto-discovery of devices using multicast announcements
-* Remembering conversation history and voice settings for each device
-* Sending & receiving audio data from the device, packed as 16-bit, 16kHz (UDP sending, TCP receiving partially buffered into PSRAM)
-* Speaker and microphone visualization with the LED’s, and custom LED control via the server
-* Mute switch functionality, tap-to-wake for enabling the microphone, and setting mic timeout via the server
-* Device-level logging to individual files and console output using `rich`
+Both targets use the same network protocol and connect to the same server. See the [M5 Echo README](m5_echo/README.md) for hardware-specific details.
 
-## Limitations of this release:
-* The Arduino IDE doesn’t (yet) support the Espressif’s Audio SDK’s, such as [ESP-ADF](https://github.com/espressif/esp-adf), [ESP-Skainet](https://github.com/espressif/esp-skainet) etc. For these demo's it's not absolutely required, but if you use Espressif’s ESP-IDF with these SDK's you'd unlock features such as:
-  * VAD (Voice Activity Detection) - in this example VAD is offloaded to the server using webrtcvad, and the listening period is extended by either tapping the device or by the server sending mic keep alive timeouts (network traffic is really minimal at 16-bit, 16kHz)
-  * AEC (Acoustic Echo Cancellation) - to allow you to effectively talk over the assistant by removing the speaker output from audio input
-  * BSS (Blind Source Separation) - let’s you use both mic’s for isolating speakers based on location, and other noise suppression
-  * Wakewords and other on-device commands - I’m not a believer in this given how finicky these can be and don’t think these are and think all command logic should be handled by layers of language models on the server.
-* The server currently only does transcription locally and uses:
-  * OpenAI for generating responses & functions calls, but if you have the hardware you could run a local LLM, using something like ToolLLM for calling API’s to add almost any capabilities you’d wish.
-  * Text-to-speech from Elevenlabs - this is fair to say the easiest to get running, fastest and most expressive option out there but FWIR data policy is a little dubious so careful about sending anything too sensitive. I’d really like to see comparable performing open source options that you can run locally
-* Conversation flow is highly serialized, i.e. recording > transcription > LLM > TTS needs to finish each step before moving onto the next. Not included here is feeding incomplete transcriptions to a smaller model, and streaming slower LLM's like GPT4 to Elevenlabs and sending streaming responses back, it's currently a little too hacky to include in this release.
-* No wakeword usage, mostly done intentionally as I feel uttering a wake-word before every response is a terrible experience. This currently uses a combo of VAD, mic-timeouts sent from server, tap-to-wake, mute switch usage etc. Not included here is experiments running a smaller, faster LLM for classification with a running transcription before handing off to a larger LLM with specific prompt
+## Architecture
 
-## Other areas for improvement
-These are things I didn't get time to implement but I believe would be invaluable and pretty achievable
-* Speaker diarization - know who is saying what, and have the LLM enage in multi-user conversations or infer when it isn't being spoken to
-* Interruptions - requires AEC for simultaneous listening and playback
-* Smaller local models/LLM's for running classification, detecting intent and routing to larger LLM's
-
-# Installation
-
-## 🖥️ Server
-
-Ensure you can install [Whisper](https://github.com/openai/whisper) and run at least the base model, following any debugging steps they have if not. If you can get past that, it should be as simple as:
 ```
-cd server
-pip install -r requirements.txt
+                ESP32 Device                              Server Pipeline
+  ┌──────────────────────────────┐       ┌──────────────────────────────────────┐
+  │  Mic ─→ I2S RX ─→ mu-law ──────UDP 3000──→ mu-law decode ─→ VAD ─→ ASR    │
+  │                              │       │                                      │
+  │  Speaker ←─ I2S TX ←─ Opus ←──TCP 3001──← Opus encode ←─ TTS ←─ LLM      │
+  └──────────────────────────────┘       └──────────────────────────────────────┘
 ```
 
-Adjust settings in the `config.yaml`, and tweak aspects such as how much silence is needed to start processing to trade-off snappiness vs avoiding cutting off the user.
+**Why mu-law upstream:** Stateless sample-by-sample encoding (~1% CPU), zero buffering latency. ASR models handle the quality fine.
 
-Add your Elevenlabs token to `credentials.json` and ensure you have a cloned voice in your account that you set in the `config.yaml` under `elevenlabs_default_voice`
- 
-You'll also need a greeting WAV set in `config.yaml` under `greeting_wav`, that will be sent to devices on connecting to the WiFi. This is up to you to record or procure ([e.g.](https://github.com/ytdl-org/youtube-dl))
+**Why Opus downstream:** Human ears need better quality than ASR, and Opus decoding is easier for an ESP32. Opus gives 14-16x compression vs mu-law's 2x, and TCP ensures reliable ordered delivery for the stateful codec.
 
-A small subset of the config parameters can be set as optional arguments when running the script. For e.g. the following will run the server with note-taking, Home Assistant, Maubot, real sending of messages enabled (a safe guard disabled by default), and a smaller English only Whisper model for transcription.
+### Device discovery
 
-`python server.py --n --ha --mb --send --whisper base.en`
+1. ESP32 boots and joins WiFi
+2. Sends multicast announcement to `239.0.0.1:12345` with hostname, git hash, and PTT flag
+3. Server discovers device and connects to its TCP server on port 3001
+4. ESP32 learns server IP from the TCP connection and starts sending mic audio via UDP
 
-### 🏡 Home Assistant
-I recommend setting this up on the same server or one that is always plugged in on your network, following the [Docker Compose instructions](https://www.home-assistant.io/installation/linux#docker-compose)
+### TCP command protocol
 
-Then go through the onboarding, setup a user, name your devices and get a Long Lived token to add to `credentials.json` together with the URL e.g. `http://my-local-server:8123/`
+All commands use a 6-byte header. The server initiates TCP connections to the ESP32.
 
-### 🤖 Maubot
-Follow instructions [here](https://github.com/justLV/onju-home-maubot) to setup Maubot with your Beeper account. Ensure the correct URL is setup in `config.yaml`, set `send_replies` to True if your friends are forgiving of the odd mistakes, and set a `footer`.
+| Byte 0 | Command | Payload |
+|---|---|---|
+| `0xAA` | Audio playback | mic_timeout(2B), volume, LED fade, compression type, then length-prefixed Opus frames |
+| `0xBB` | Set LEDs | LED bitmask, RGB color |
+| `0xCC` | LED blink (VAD) | intensity, RGB color, fade rate |
+| `0xDD` | Mic timeout | timeout in seconds (2B) |
 
-Don’t have Beeper yet and can’t wait? [Try setup a Matrix bridge yourself](https://docs.mau.fi/bridges/go/imessage/mac/setup.html) and a custom function definition for OpenAI function calling (and share how you did it!)
+A zero-length Opus frame (`0x00 0x00`) signals end of speech.
 
-Following this example you can also integrate e-mail.
+### FreeRTOS task layout
 
-## 📟 Firmware
+| Core | Task | Purpose |
+|---|---|---|
+| Core 0 | Arduino loop | TCP server, touch/mute input, UART debug |
+| Core 1 | `micTask` | I2S read, mu-law encode, UDP send |
+| Core 1 | `opusDecodeTask` | TCP read, Opus decode, I2S write (created per playback) |
+| Core 1 | `updateLedTask` | 40Hz LED refresh with gamma-corrected fade |
 
-Irrespective of what you use for development, the quickest & least error prone setup for building & flashing firmware is probably installing the Arduino IDE [Software](https://www.arduino.cc/en/software), and then using this IDE or your preference i.e. VSCode for development (Copilot)
+### Conversation backends
 
-* Add the ESP32 boards as detailed [here](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html)
-(TL;DR add `https://espressif.github.io/arduino-esp32/package_esp32_index.json` to `Preferences > Additional Boards Manager URL’s`)
-* Under Boards Manager, install “esp32” by Espressif Systems
-* Under Library Manager, install “Adafruit NeoPixel Library” and “esp32_opus” by sh123 (the `flash.sh` script installs these automatically)
-* Clone this repo to `Documents/Arduino` for simplicity. 
-* Add your WiFi credentials to `credentials.h`
-* Run `bash setup-git-hash.sh` to add a header with the git-hash (optional). This will then automatically update after commits, and help track the firmware that your devices are running from the server side.
-* Open File > Sketchbook > onju-home > onjuino
-* Select Tools > Board > esp32 > ESP32S3 Dev Module
-* Under Tools ensure:
-    * USB CDC on Boot set to Enabled
-    * PSRAM set to OPI PSRAM
-    * Board is plugged in and Port is selected (you may need to install USB bridge drivers as detailed by Espressif, don’t worry if name is incorrect)
-* Build and upload
-* If not reset, press the reset button. In Serial Monitor you can also send `r` to reset the device (assuming it is already booted)
+The pipeline supports two conversation backends, selectable via `config.yaml`:
 
-### Using flash.sh
+**Local** (`conversation.backend: "local"`): Manages conversation history locally with per-device JSON persistence. Sends the full message history on each LLM request. Works with any OpenAI-compatible endpoint.
 
-For command-line compilation and flashing, use the `flash.sh` script:
+**OpenClaw Managed** (`conversation.backend: "managed"`): Delegates session management to an [OpenClaw](https://github.com/openclaw) gateway. Only sends the latest user message -- OpenClaw tracks history server-side using the device ID as the session key. Set `OPENCLAW_GATEWAY_TOKEN` in your environment and point `base_url` at your gateway.
+
+## Installation
+
+### Server
 
 ```bash
-# Compile only (verify code compiles without ESP32 connected)
-./flash.sh compile
+# Clone and set up Python environment
+git clone https://github.com/justLV/onju-v2.git
+cd onju-v2
+uv venv && source .venv/bin/activate
+uv pip install -e .
 
-# Auto-detect ESP32 and flash (defaults to onjuino)
+# macOS: install system libraries for Opus encoding
+brew install opus portaudio
+
+# Configure
+cp pipeline/config.yaml.example pipeline/config.yaml
+# Edit config.yaml with your API keys and preferences
+```
+
+**ASR** -- an embedded [parakeet-mlx](https://github.com/senstella/parakeet-mlx) server is included (Apple Silicon):
+```bash
+uv pip install -e ".[asr]"
+python -m pipeline.services.asr_server  # runs on port 8100
+```
+Or point `asr.url` in config.yaml at any Whisper-compatible endpoint.
+
+**LLM** -- any OpenAI-compatible server:
+```bash
+# Local (mlx_lm on Apple Silicon)
+mlx_lm.server --model unsloth/gemma-4-E4B-it-UD-MLX-4bit --port 8080
+
+# Local (Ollama)
+ollama run gemma4:e4b
+
+# Cloud -- just set base_url and api_key in config.yaml (default: Haiku via OpenRouter)
+```
+
+**TTS** -- [ElevenLabs](https://elevenlabs.io) is the default (set your API key in config.yaml). For fully offline TTS, you can use [mlx-audio](https://github.com/lucasnewman/mlx-audio) (`uv pip install -e ".[tts-local]"`, then set `tts.backend: "qwen3"` for example in config.yaml - I don't think this is the best quality, just including as reference for a local TTS!).
+
+**Run:**
+```bash
+source .venv/bin/activate
+python -m pipeline.main
+```
+
+### Firmware
+
+Both targets can be compiled and flashed from the command line:
+
+```bash
+# Flash onjuino (default)
 ./flash.sh
 
-# Flash m5_echo target
+# Flash M5 Echo
 ./flash.sh m5_echo
 
-# Flash to specific port
-./flash.sh /dev/cu.usbmodem1234
+# Compile only (no device needed)
+./flash.sh compile
 
-# Regenerate WiFi credentials
+# Regenerate WiFi credentials from macOS Keychain, defaults to manual entry
 ./flash.sh --regen
 ```
 
-**Note:** Always run `./flash.sh compile` after making changes to `onjuino.ino` to verify your code compiles before committing.
+Requires `arduino-cli`:
+```bash
+# macOS
+brew install arduino-cli
+arduino-cli core install esp32:esp32
+```
+The flash script auto-installs required libraries (Adafruit NeoPixel, esp32_opus).
 
-## 🧩 Hardware 
+WiFi credentials are generated from your macOS Keychain on first flash, or you can edit the `credentials.h.template` files manually.
+
+For Arduino IDE users: select **ESP32S3 Dev Module** (onjuino) or **ESP32 Dev Module** (M5 Echo), enable **USB CDC on Boot** and **OPI PSRAM** (onjuino only), then build and upload.
+
+### Hardware
 
 <p float="left">
   <img src="images/copper.png" width="48%" />
-  <img src="images/render.png" width="48%" /> 
+  <img src="images/render.png" width="48%" />
 </p>
 
-[Preview schematics & PCB here](https://365.altium.com/files/77C755F4-7195-4B29-93AA-0C10A2471AC3) 
-You should be able to download files, otherwise they are in the folder `hardware` in Altium format. Feel free to modify & improve this design and share your updates!
+[Preview schematics & PCB](https://365.altium.com/files/77C755F4-7195-4B29-93AA-0C10A2471AC3) | [Order from PCBWay](https://www.pcbway.com/project/shareproject/Onju_Voice_d33625a1.html) | Altium source files and schematics in `hardware/`. You can order these PCBA's directly from PCBWay [here](https://www.pcbway.com/project/shareproject/Onju_Voice_d33625a1.html).
 
-You can order PCBA's directly from PCBWay [here](https://www.pcbway.com/project/shareproject/Onju_Voice_d33625a1.html). I've used a few suppliers and they are of the most reliable I've experienced for turnkey assembly at that pricepoint so I'm happy to point business their way. (Other options of selling single units, with margins, ended up forcing a pricepoint > Google Nest Mini itself, and wouldn't allow shipment into EU/UK without certification so I abandoned this)
+If you don't have a custom PCB, you can use the [M5Stack ATOM Echo](https://shop.m5stack.com/products/atom-echo-smart-speaker-dev-kit). I'd recommend adding a Battery ([Biscuit](https://www.youtube.com/watch?v=OMg3epr53Ns)) Base ([link](https://shop.m5stack.com/products/atomic-battery-base-200mah))
 
-I will be sharing more detailed instructions for replacement.
+## Configuration reference
 
-Replacement gaskets for the microphone & LED's can be made using [adhesive foam](https://www.amazon.com/gp/product/B07KCJ31J9) and a [punch set](https://www.amazon.com/gp/product/B087D2Z43F)) for example
+See [`pipeline/config.yaml.example`](pipeline/config.yaml.example) for all options. Key sections:
 
-## ❓Questions
+| Section | What it controls |
+|---|---|
+| `asr` | Speech-to-text service URL |
+| `conversation.backend` | `"local"` or `"managed"` (OpenClaw) |
+| `conversation.local` | LLM endpoint, model, system prompt, message history |
+| `conversation.managed` | OpenClaw gateway URL, auth token, message channel |
+| `tts` | TTS backend (`"elevenlabs"` or `"qwen3"`), voice settings |
+| `vad` | Voice activity detection thresholds and timing |
+| `network` | UDP/TCP/multicast ports |
+| `device` | Volume, mic timeout, LED settings, greeting audio |
 
-### Does this replace my Google Nest Mini?
+### Environment variables
 
-While this replicates the interfaces of the Google Nest Mini, don’t expect this to be a 1:1 replacement, for e.g. it is not intended to be a music playback device (although there is probably no reason it couldn’t be developed to be used as such). It’s also worth re-iterating that like the Google Nest Mini, this requires a separate server, although this can be in your home running local models instead of in a Google datacenter. 
-**The original is well tested, maintained, certified and works out the box, while this is essentially a dev board with some neat examples for you to build on top of**
+| Variable | Used by |
+|---|---|
+| `OPENROUTER_API_KEY` | Local backend via OpenRouter (default) |
+| `ANTHROPIC_API_KEY` | Local backend via Anthropic API directly |
+| `OPENCLAW_GATEWAY_TOKEN` | Managed (OpenClaw) backend |
 
-### What if I don’t have a Google Nest Mini but still want to use this?
+## Testing
 
-Fortunately they’re still being sold, you may find deals for <$40 which is pretty good for the quality of speaker and form factor. I picked up quite a few from eBay, just make sure you get the 2nd gen.
+```bash
+# Emulate an ESP32 device (no hardware needed)
+python test_client.py                  # localhost
+python test_client.py 192.168.1.50     # remote server
 
-The adventurous can get try replacement shells from [AliExpress](https://www.aliexpress.us/item/3256803723188315.html) for e.g., but you’ll still need a base, power input, mute switch, speaker & mount, capacitive touch panels, and replacement gaskets etc. A hero out there could design a custom enclosure that fits an off-the-shelf speaker.
+# Test speaker output (send audio file to device w/ TCP and Opus encoding)
+python test_speaker.py <device-ip>
 
-### But I’m really impatient and want to get hacking away! What can I do?
+# Test mic input (receive and record UDP audio)
+python test_mic.py --duration 10
 
-a) if you can commit to making significant contributions to the codebase and/or major contributions to the board design or RF review, we may be able to make early samples available
+# Serial monitor (auto-detects USB port)
+python serial_monitor.py test.wav
+```
 
-b) if you don’t need the form factor, don’t mind rolling up my sleeves, and have some HW experience, you can breadboard it out with readily available components until you can get your hands on an order. Here are the components that should be able to get a demo running (🌸 Adafruit link for convenience but shop around wherever you’d like)
+## Voice agent architecture
 
-* ESP32-S3 devboard, ideally w/ PSRAM (e.g. [QT Py S3](https://www.adafruit.com/product/5700) or [ESP32-S3](https://www.adafruit.com/product/5364))
-* [Microphone](https://www.adafruit.com/product/3421) (only need 1 for the Arduino implementation, ensure it's a SPH0645 to limit debugging)
-* [Amplifier](https://www.adafruit.com/product/3006)
-* [Speaker](https://www.adafruit.com/product/1313)
-* [Neopixel LED strip](https://www.adafruit.com/product/1426) - just set the firmware to the correct #
-* [Breadboard & wire kit](https://www.adafruit.com/product/3314)  (you can use protruding pieces of wire for cap touch)
+The current pipeline implements a simple listen-transcribe-respond-speak loop. The architecture is designed to evolve toward a voice-native agent loop where the LLM can call tools, narrate results, and stream speech in real-time:
 
-You'll need to update the `custom_boards.h` with your pin mapping
+```
+LLM (streaming) ──→ sentence buffer ──→ TTS ──→ Opus encode ──→ ESP32
+       │
+       └──→ tool calls ──→ execute ──→ feed results back ──→ LLM continues
+```
 
-## **🍐 PR's, issues, suggestions & general feedback welcome!🏡**
+## UART debug commands
+
+Both firmware targets support serial commands at 115200 baud:
+
+| Key | Action |
+|---|---|
+| `r` | Reboot |
+| `M` | Enable mic for 10 minutes |
+| `m` | Disable mic |
+| `A` | Re-send multicast announcement |
+| `c` | Enter config mode (WiFi, server, volume) |
+| `W`/`w` | LED test fast/slow (onjuino) |
+| `P` | Play 440Hz test tone (M5 Echo) |
+
+## License
+
+MIT

@@ -16,8 +16,8 @@ import glob
 
 def find_usb_port():
     """Auto-detect USB serial port"""
-    # Look for ESP32 USB ports
-    ports = glob.glob('/dev/cu.usbmodem*')
+    # Look for ESP32 USB ports (usbmodem = ESP32-S3, usbserial = ESP32-PICO/M5)
+    ports = glob.glob('/dev/cu.usbmodem*') + glob.glob('/dev/cu.usbserial-*')
     if ports:
         return sorted(ports)[0]  # Return first match
     return None

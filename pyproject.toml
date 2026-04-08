@@ -1,7 +1,11 @@
 [project]
 name = "onju-voice"
-version = "0.1.0"
+version = "2.0.0"
+description = "A hackable AI home assistant platform using the Google Nest Mini form factor"
 requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "justLV" }]
+readme = "README.md"
 dependencies = [
     "httpx",
     "numpy",
@@ -15,9 +19,14 @@ dependencies = [
     "pyserial",
 ]
 
+[project.urls]
+Homepage = "https://github.com/justLV/onju-voice"
+Repository = "https://github.com/justLV/onju-v2"
+
 [tool.setuptools.packages.find]
 include = ["pipeline*"]
 
 [project.optional-dependencies]
+asr = ["fastapi", "uvicorn", "parakeet-mlx", "python-multipart"]
 tts-local = ["mlx-audio>=0.3.1"]
 mic = ["pyaudio"]

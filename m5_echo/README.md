@@ -1,6 +1,6 @@
 # M5 Echo - Push-to-Talk Voice Client
 
-Firmware for the M5Stack ATOM Echo that connects to the esp32-bridge server using the same protocol as onjuino, but with push-to-talk (PTT) instead of voice-activity detection (VAD).
+Firmware for the [M5Stack ATOM Echo](https://shop.m5stack.com/products/atom-echo-smart-speaker-dev-kit) that connects to the pipeline server using the same protocol as onjuino, but with push-to-talk (PTT) instead of voice-activity detection (VAD).
 
 ## How it differs from onjuino
 
@@ -69,17 +69,18 @@ Config mode is also accessible during WiFi connection (if the stored SSID is wro
 
 ## Building and flashing
 
+From the repo root:
+
 ```bash
-./flash.sh              # auto-detect port, compile and flash
-./flash.sh compile      # compile only
-./flash.sh --regen      # regenerate WiFi credentials from keychain
-./flash.sh --force      # force recompile
+./flash.sh m5_echo              # auto-detect port, compile and flash
+./flash.sh m5_echo compile      # compile only
+./flash.sh m5_echo --regen      # regenerate WiFi credentials from keychain
 ```
 
-Requires `arduino-cli` with the `esp32:esp32` core and `Adafruit NeoPixel` library installed. The Opus decoder uses the `esp32_opus` library (same as onjuino).
+Requires `arduino-cli` with the `esp32:esp32` core. The flash script auto-installs required libraries (Adafruit NeoPixel, esp32_opus).
 
 ## Testing
 
 ```bash
-python3 terminal.py     # serial monitor with command input
+python serial_monitor.py     # serial monitor (auto-detects USB port)
 ```

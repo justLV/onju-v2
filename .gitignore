@@ -9,25 +9,22 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+.venv/
 
 # macOS
 .DS_Store
 .AppleDouble
 .LSOverride
 
-# Audio test files
-recording.wav
-
-# Local development
-server/local.py
+# Secrets & local config
 pipeline/config.yaml
-.venv/
+m5_echo/credentials.h
 
-# Runtime data
+# Runtime data & test output
 data/
+logs/
+*.wav
+!data/.gitkeep
 
 # Claude
 .claude/
-m5_echo/credentials.h
-m5_echo/mic_test.wav
-m5_echo/build/

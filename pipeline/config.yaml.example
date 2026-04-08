@@ -5,17 +5,17 @@ conversation:
   backend: "local"                           # "local" or "managed" (e.g. OpenClaw)
 
   local:
-    base_url: "http://localhost:8080/v1"     # mlx_lm.server, Ollama, OpenRouter, Gemini, etc.
-    api_key: "none"                          # set key or use ${ENV_VAR} reference
-    model: "mlx-community/gemma-3-4b-it-qat-4bit"
+    base_url: "https://openrouter.ai/api/v1"  # OpenRouter, Ollama, mlx_lm.server, Gemini, etc.
+    api_key: "${OPENROUTER_API_KEY}"           # set key or use ${ENV_VAR} reference
+    model: "anthropic/claude-haiku-4.5"
     max_messages: 20
     max_tokens: 300
     system_prompt: "You are a helpful voice assistant. Keep responses concise (under 2 sentences)."
-    persist_dir: "data/conversations"        # per-device message history (omit to disable)
-    # Gemini example:
-    # base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
-    # api_key: "${GEMINI_API_KEY}"
-    # model: "gemini-3.1-flash-lite-preview"
+    persist_dir: "data/conversations"          # per-device message history (omit to disable)
+    # Local example (Ollama):
+    # base_url: "http://localhost:11434/v1"
+    # api_key: "none"
+    # model: "gemma4:e4b"
 
   managed:
     base_url: "http://127.0.0.1:18789/v1"   # OpenClaw gateway
