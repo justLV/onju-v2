@@ -1,4 +1,4 @@
-# Onju Voice v2 
+# Onju Voice v2 (OnjuClaw 🍐🦞 ?)
 
 Enable multiple "Google Home" speakers to connect to a Mac Mini (or other local server) for talking to your agent(s) over your local WiFi.
 
@@ -88,6 +88,21 @@ The pipeline supports two conversation backends, selectable via `config.yaml`:
 **Local** (`conversation.backend: "local"`): Manages conversation history locally with per-device JSON persistence. Sends the full message history on each LLM request. Works with any OpenAI-compatible endpoint.
 
 **OpenClaw Managed** (`conversation.backend: "managed"`): Delegates session management to an [OpenClaw](https://github.com/openclaw) gateway. Only sends the latest user message -- OpenClaw tracks history server-side using the device ID as the session key. Set `OPENCLAW_GATEWAY_TOKEN` in your environment and point `base_url` at your gateway.
+
+### Setting up OpenClaw
+
+If you have [OpenClaw](https://github.com/openclaw) installed, a setup script is included:
+
+```bash
+./setup_openclaw.sh
+```
+
+This will:
+1. Enable the chat completions HTTP endpoint on the gateway
+2. Append a voice mode prompt to `~/.openclaw/workspace/AGENTS.md` (tells the agent to respond in concise, speech-friendly prose when the message channel is `onju-voice`)
+3. Restart the gateway
+
+Then set `conversation.backend: "managed"` in `pipeline/config.yaml` and ensure `OPENCLAW_GATEWAY_TOKEN` is set in your environment.
 
 ## Installation
 
