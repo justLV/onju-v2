@@ -34,8 +34,9 @@ tts:
     ref_text: ""
   elevenlabs:
     api_key: ""                              # your ElevenLabs API key
-    default_voice: "Rachel"
+    default_voice: "Archer"
     voices:
+      Archer: "Fahco4VZzobUeiPqni1S"        # British conversational male
       Rachel: "21m00Tcm4TlvDq8ikWAM"        # add your voice IDs here
 
 vad:
