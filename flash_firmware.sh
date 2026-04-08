@@ -60,8 +60,14 @@ else
             echo "Known WiFi networks:"
             echo "$PREFERRED" | head -5 | cat -n
             echo ""
+            NETWORK_LIST=$(echo "$PREFERRED" | head -5)
+            NUM_NETWORKS=$(echo "$NETWORK_LIST" | wc -l | tr -d ' ')
             read -p "WiFi SSID [$TOP_SSID]: " WIFI_SSID
-            WIFI_SSID="${WIFI_SSID:-$TOP_SSID}"
+            if [ -z "$WIFI_SSID" ]; then
+                WIFI_SSID="$TOP_SSID"
+            elif [[ "$WIFI_SSID" =~ ^[0-9]+$ ]] && [ "$WIFI_SSID" -ge 1 ] && [ "$WIFI_SSID" -le "$NUM_NETWORKS" ]; then
+                WIFI_SSID=$(echo "$NETWORK_LIST" | sed -n "${WIFI_SSID}p")
+            fi
         fi
     fi
 

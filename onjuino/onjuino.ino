@@ -73,6 +73,7 @@ const unsigned long MIC_LISTEN_MS = 20000; // 20s default (server VAD extends wh
 
 // Call state
 volatile bool callActive = false;
+volatile bool sendDisconnect = false;
 
 // PTT state: mic only active while button held
 volatile bool pttHeld = false;
@@ -1091,6 +1092,19 @@ void touchTask(void *parameter)
                 waitingForSecondTap = false;
             }
         }
+
+        // Send disconnect signal from task context (not safe in ISR)
+        if (sendDisconnect) {
+            sendDisconnect = false;
+            if (serverIP != IPAddress(0, 0, 0, 0)) {
+                uint8_t disc = 0xFF;
+                for (int i = 0; i < 3; i++) {
+                    udp.beginPacket(serverIP, 3000);
+                    udp.write(&disc, 1);
+                    udp.endPacket();
+                }
+            }
+        }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -1196,19 +1210,7 @@ void handleDoubleTap()
     }
 
     callActive = false;
-
-    // Send disconnect signal to bridge (single byte 0xFF via UDP, send 3x for reliability)
-    if (serverIP != IPAddress(0, 0, 0, 0))
-    {
-        uint8_t disc = 0xFF;
-        for (int i = 0; i < 3; i++)
-        {
-            udp.beginPacket(serverIP, 3000);
-            udp.write(&disc, 1);
-            udp.endPacket();
-            if (i < 2) delay(5);
-        }
-    }
+    sendDisconnect = true; // deferred to touchTask (UDP not safe in ISR)
 
     setLed(255, 40, 0, 200, 2); // slow red-orange pulse = call ended
 
