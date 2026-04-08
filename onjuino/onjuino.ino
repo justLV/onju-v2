@@ -1206,7 +1206,7 @@ void handleShortPress()
         }
         else
         {
-            setLed(0, 255, 30, 255, 10);
+            setLed(255, 255, 255, 255, 8); // white flash = mic re-activated
         }
     }
 }
