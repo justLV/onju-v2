@@ -13,7 +13,7 @@
 #endif
 
 #define BOARD_V3
-#define HOST_NAME "onju-coral"
+#define HOST_NAME "onju"
 
 // Set to true for push-to-talk mode (hold button = mic on, release = mic off)
 // PTT devices auto-start a call on boot and power-off to disconnect
@@ -71,9 +71,8 @@ volatile bool waitingForSecondTap = false;
 const unsigned long DOUBLE_TAP_WINDOW_MS = 500;
 const unsigned long MIC_LISTEN_MS = 20000; // 20s default (server VAD extends when needed)
 
-// Call state
-volatile bool callActive = false;
-volatile bool sendDisconnect = false;
+// Device enable state — toggled by double-tap, gates mic + audio playback
+volatile bool deviceEnabled = true;
 
 // PTT state: mic only active while button held
 volatile bool pttHeld = false;
@@ -185,8 +184,11 @@ void setup()
     Serial.println("Touch enabled");
 #endif
 
-    char desired_hostname[50];
-    snprintf(desired_hostname, sizeof(desired_hostname), "%s-%s", HOST_NAME, BOARD_NAME);
+    // Build hostname from prefix + last 3 bytes of MAC: e.g. "onju-A1B2C3"
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    char desired_hostname[20];
+    snprintf(desired_hostname, sizeof(desired_hostname), "%s-%02X%02X%02X", HOST_NAME, mac[3], mac[4], mac[5]);
 
     if (WiFi.setHostname(desired_hostname))
     {
@@ -296,13 +298,13 @@ void setup()
     udp.write(reinterpret_cast<const uint8_t *>(mcast_string.c_str()), mcast_string.length());
     udp.endPacket();
 
-    callActive = true;
+    // Device starts enabled; mic is gated by mic_timeout (0 = expired, user must tap or greeting sets it)
+    deviceEnabled = true;
     if (PTT_MODE) {
-        Serial.println("PTT mode: call auto-started on boot");
+        Serial.println("PTT mode: device enabled on boot");
         setLed(0, 100, 255, 200, 3); // blue pulse = PTT idle, waiting for bridge
     } else {
-        Serial.println("VOX mode: call active on boot");
-        mic_timeout = millis() + MIC_LISTEN_MS;
+        Serial.println("VOX mode: device enabled, tap to start mic");
     }
 
     i2s_driver_install(I2S_NUM, &i2s_config, 0, NULL);
@@ -446,340 +448,319 @@ void loop()
             Serial.println("Server IP saved to NVS");
         }
 
-        uint32_t waitStart = millis();
-        bool headerReady = true;
-        while (client.available() < 6)
+        // Persistent connection loop: process commands until disconnect or timeout
+        while (client.connected() || client.available())
         {
-            if ((millis() - waitStart) > 2000)
+            // Wait for 6-byte header (500ms timeout for responsive disconnect detection)
+            uint32_t waitStart = millis();
+            while (client.available() < 6)
             {
-                Serial.println("Header wait timeout");
-                client.stop();
-                headerReady = false;
-                break;
-            }
-            delay(1);
-        }
-        if (!headerReady) { delay(10); return; }
-
-        uint8_t header[6];
-        client.read(header, 6);
-
-        Serial.print("Header ( ");
-        for (int i = 0; i < 6; i++)
-        {
-            Serial.print(header[i], HEX);
-            Serial.print(" ");
-        }
-        Serial.println(")");
-
-        /*
-        header[0]   0xAA for audio
-        header[1:2] mic timeout in seconds (after audio is done playing)
-        header[3]   volume
-        header[4]   fade rate of LED's VAD visualization
-        header[5]   compression type: 0=PCM (raw), 1=μ-law, 2=Opus
-        */
-        if (header[0] == 0xAA)
-        {
-            if (!callActive)
-            {
-                Serial.println("Ignoring audio - call not active");
-                client.stop();
-                return;
-            }
-            leds.clear();
-            leds.show();
-            uint16_t timeout = header[1] << 8 | header[2];
-            speaker_volume = header[3];
-            uint8_t compression_type = header[5];
-            setLed(255, 255, 255, 0, header[4]); // header[4] sets fade rate. hardcoding to white but different voices could have different colors in future
-
-            Serial.printf("Received audio (compression=%d) with mic timeout %d seconds, volume %d\n",
-                         compression_type, timeout, speaker_volume);
-
-            if (speaker_volume > 20)
-            {
-                speaker_volume = 20;
-            }
-
-            isPlaying = true;
-
-            bool initialBufferFilled = false; // get a nice reservoir loaded into wavData to try avoid jitter
-            uint32_t tic = millis();
-            size_t totalSamplesRead = 0;
-
-            size_t bytesAvailable, bytesToRead, bytesRead, bytesWritten, bytesToWrite;
-            int16_t sample16;
-            uint32_t sum = 0; // for calculating average for LEDs
-            bool wasInterrupted = false; // Track if playback was interrupted
-
-            // Handle Opus compressed audio
-            if (compression_type == 2 && opus_decoder != NULL)
-            {
-                Serial.println("Starting Opus decode task with 32KB stack");
-                opusClient = &client;
-                opusTaskRunning = true;
-                interruptPlayback = false; // Clear interrupt flag
-
-                // Create dedicated task with large stack for Opus decoding
-                xTaskCreatePinnedToCore(
-                    opusDecodeTask,
-                    "OpusDecodeTask",
-                    32768,  // 32KB stack for Opus decoder
-                    NULL,
-                    1,
-                    NULL,
-                    1
-                );
-
-                // Wait for task to finish or interrupt
-                while (opusTaskRunning)
+                if (!client.connected()) goto tcp_cleanup;
+                if ((millis() - waitStart) > 500)
                 {
-                    delay(100);
+                    goto tcp_cleanup;
+                }
+                delay(1);
+            }
+
+            uint8_t header[6];
+            client.read(header, 6);
+
+            Serial.print("Header ( ");
+            for (int i = 0; i < 6; i++)
+            {
+                Serial.print(header[i], HEX);
+                Serial.print(" ");
+            }
+            Serial.println(")");
+
+            /*
+            header[0]   0xAA for audio
+            header[1:2] mic timeout in seconds (after audio is done playing)
+            header[3]   volume
+            header[4]   fade rate of LED's VAD visualization
+            header[5]   compression type: 0=PCM (raw), 1=μ-law, 2=Opus
+            */
+            if (header[0] == 0xAA)
+            {
+                if (!deviceEnabled)
+                {
+                    Serial.println("Ignoring audio - device disabled");
+                    break;
+                }
+                leds.clear();
+                leds.show();
+                uint16_t timeout = header[1] << 8 | header[2];
+                speaker_volume = header[3];
+                uint8_t compression_type = header[5];
+                setLed(255, 255, 255, 0, header[4]);
+
+                Serial.printf("Received audio (compression=%d) with mic timeout %d seconds, volume %d\n",
+                             compression_type, timeout, speaker_volume);
+
+                if (speaker_volume > 20)
+                {
+                    speaker_volume = 20;
                 }
 
-                // Remember if we were interrupted (before clearing flag)
-                wasInterrupted = interruptPlayback;
+                isPlaying = true;
 
-                // If interrupted, drain remaining TCP data without playing
-                if (interruptPlayback)
+                bool initialBufferFilled = false;
+                uint32_t tic = millis();
+                size_t totalSamplesRead = 0;
+
+                size_t bytesAvailable, bytesToRead, bytesRead, bytesWritten, bytesToWrite;
+                int16_t sample16;
+                uint32_t sum = 0;
+                bool wasInterrupted = false;
+
+                // Handle Opus compressed audio
+                if (compression_type == 2 && opus_decoder != NULL)
                 {
-                    Serial.println("Draining TCP buffer after interrupt...");
+                    Serial.println("Starting Opus decode task with 32KB stack");
+                    opusClient = &client;
+                    opusTaskRunning = true;
+                    interruptPlayback = false;
 
-                    // Clear I2S DMA buffer to stop audio immediately
-                    i2s_zero_dma_buffer(I2S_NUM);
+                    xTaskCreatePinnedToCore(
+                        opusDecodeTask,
+                        "OpusDecodeTask",
+                        32768,
+                        NULL,
+                        1,
+                        NULL,
+                        1
+                    );
 
-                    // Drain TCP for up to 1 second
-                    uint32_t drainStart = millis();
-                    while (client.connected() && (millis() - drainStart) < 1000)
+                    while (opusTaskRunning)
                     {
-                        if (client.available() >= 2)
-                        {
-                            // Read frame length
-                            uint8_t len_bytes[2];
-                            client.read(len_bytes, 2);
-                            uint16_t frame_len = (len_bytes[0] << 8) | len_bytes[1];
+                        delay(100);
+                    }
 
-                            if (frame_len > 0 && frame_len <= OPUS_MAX_PACKET)
+                    wasInterrupted = interruptPlayback;
+
+                    if (interruptPlayback)
+                    {
+                        Serial.println("Draining TCP buffer after interrupt...");
+                        i2s_zero_dma_buffer(I2S_NUM);
+
+                        uint32_t drainStart = millis();
+                        while (client.connected() && (millis() - drainStart) < 1000)
+                        {
+                            if (client.available() >= 2)
                             {
-                                // Read and discard frame data
-                                size_t bytes_discarded = 0;
-                                while (bytes_discarded < frame_len && client.available() > 0)
+                                uint8_t len_bytes[2];
+                                client.read(len_bytes, 2);
+                                uint16_t frame_len = (len_bytes[0] << 8) | len_bytes[1];
+
+                                if (frame_len > 0 && frame_len <= OPUS_MAX_PACKET)
                                 {
-                                    uint8_t dummy[256];
-                                    int to_read = min((int)(frame_len - bytes_discarded), 256);
-                                    int read_count = client.read(dummy, to_read);
-                                    if (read_count > 0)
+                                    size_t bytes_discarded = 0;
+                                    while (bytes_discarded < frame_len && client.available() > 0)
                                     {
-                                        bytes_discarded += read_count;
-                                    }
-                                    else
-                                    {
-                                        delay(1);
+                                        uint8_t dummy[256];
+                                        int to_read = min((int)(frame_len - bytes_discarded), 256);
+                                        int read_count = client.read(dummy, to_read);
+                                        if (read_count > 0)
+                                        {
+                                            bytes_discarded += read_count;
+                                        }
+                                        else
+                                        {
+                                            delay(1);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        else
-                        {
-                            delay(10);
-                        }
-                    }
-
-                    Serial.println("TCP drain complete");
-                    interruptPlayback = false; // Clear flag
-                }
-                else
-                {
-                    Serial.println("Opus decode task completed normally");
-                }
-            }
-            // Handle PCM audio (compression_type == 0)
-            else
-            {
-                while (client.connected())
-                {
-                    // Check for user interrupt
-                    if (interruptPlayback)
-                    {
-                        Serial.println("PCM playback interrupted by user");
-                        break;
-                    }
-
-                    bytesAvailable = client.available();
-
-                    if (bytesAvailable >= 2)
-                    {
-                        bytesToRead = (bytesAvailable / 2) * 2; // ensure whole samples only
-                        if (bytesToRead > tcpBufferSize)
-                        {
-                            bytesToRead = tcpBufferSize;
-                        }
-
-                        bytesRead = client.read(tcpBuffer, bytesToRead);
-
-                        for (size_t i = 0; i < bytesRead; i += 2)
-                        {
-                            sample16 = (tcpBuffer[i + 1] << 8) | tcpBuffer[i];
-                            wavData[totalSamplesRead++] = (int32_t)sample16 << speaker_volume; // crude volume control
-                        }
-                    // Start draining once we have a "good" reservoir
-                    if (initialBufferFilled || totalSamplesRead >= bufferThreshold)
-                    {
-                        if (!initialBufferFilled)
-                        {
-                            Serial.println("Initial buffer filled. totalSamplesRead: " + String(totalSamplesRead));
-                            initialBufferFilled = true;
-                        }
-
-                        bytesToWrite = totalSamplesRead * 4; // int32_t
-                        bytesWritten = 0;
-
-                        i2s_write(I2S_NUM, (uint8_t *)wavData, bytesToWrite, &bytesWritten, portMAX_DELAY);
-
-                        if (millis() - tic > 30)
-                        {
-                            tic = millis();
-                            for (int i = 0; i < 128; i += 4)
+                            else
                             {
-                                sum += abs(wavData[i]); // abs() is faster than squaring
+                                delay(10);
                             }
-                            uint8_t sum_u8 = sum >> (speaker_volume + 8); // LEDs independent of volume
-
-                            if (sum_u8 > ledLevel)
-                            { // should only ramp down naturally
-                                ledLevel = sum_u8;
-                                Serial.println("ledLevel: " + String(ledLevel));
-                            }
-                            sum = 0;
                         }
-                        totalSamplesRead = 0;
+
+                        Serial.println("TCP drain complete");
+                        interruptPlayback = false;
                     }
-                }
                     else
                     {
-                        delay(2); // Allow for some bytes to be ready before reading again
+                        Serial.println("Opus decode task completed normally");
                     }
                 }
-
-                // Remember if we were interrupted (before clearing flag)
-                wasInterrupted = interruptPlayback;
-
-                // If interrupted, drain remaining TCP data without playing
-                if (interruptPlayback)
+                // Handle PCM audio (compression_type == 0)
+                else
                 {
-                    Serial.println("Draining PCM TCP buffer after interrupt...");
-
-                    // Clear I2S DMA buffer to stop audio immediately
-                    i2s_zero_dma_buffer(I2S_NUM);
-
-                    // Drain TCP for up to 1 second
-                    uint32_t drainStart = millis();
-                    while (client.connected() && (millis() - drainStart) < 1000)
+                    while (client.connected())
                     {
-                        if (client.available() > 0)
+                        if (interruptPlayback)
                         {
-                            uint8_t dummy[512];
-                            int available = min(client.available(), 512);
-                            client.read(dummy, available);
+                            Serial.println("PCM playback interrupted by user");
+                            break;
+                        }
+
+                        bytesAvailable = client.available();
+
+                        if (bytesAvailable >= 2)
+                        {
+                            bytesToRead = (bytesAvailable / 2) * 2;
+                            if (bytesToRead > tcpBufferSize)
+                            {
+                                bytesToRead = tcpBufferSize;
+                            }
+
+                            bytesRead = client.read(tcpBuffer, bytesToRead);
+
+                            for (size_t i = 0; i < bytesRead; i += 2)
+                            {
+                                sample16 = (tcpBuffer[i + 1] << 8) | tcpBuffer[i];
+                                wavData[totalSamplesRead++] = (int32_t)sample16 << speaker_volume;
+                            }
+                            if (initialBufferFilled || totalSamplesRead >= bufferThreshold)
+                            {
+                                if (!initialBufferFilled)
+                                {
+                                    Serial.println("Initial buffer filled. totalSamplesRead: " + String(totalSamplesRead));
+                                    initialBufferFilled = true;
+                                }
+
+                                bytesToWrite = totalSamplesRead * 4;
+                                bytesWritten = 0;
+
+                                i2s_write(I2S_NUM, (uint8_t *)wavData, bytesToWrite, &bytesWritten, portMAX_DELAY);
+
+                                if (millis() - tic > 30)
+                                {
+                                    tic = millis();
+                                    for (int i = 0; i < 128; i += 4)
+                                    {
+                                        sum += abs(wavData[i]);
+                                    }
+                                    uint8_t sum_u8 = sum >> (speaker_volume + 8);
+
+                                    if (sum_u8 > ledLevel)
+                                    {
+                                        ledLevel = sum_u8;
+                                    }
+                                    sum = 0;
+                                }
+                                totalSamplesRead = 0;
+                            }
                         }
                         else
                         {
-                            delay(10);
+                            delay(2);
                         }
                     }
 
-                    Serial.println("PCM TCP drain complete");
-                    interruptPlayback = false; // Clear flag
-                }
-            } // end else (PCM handling)
+                    wasInterrupted = interruptPlayback;
 
-            // Only flush silence if not interrupted
-            if (!wasInterrupted)
-            {
-                // Hack to fill buffers with silence and block till all real audio is flushed out
-                uint32_t silenceBuffer[240];
-                memset(silenceBuffer, 0, sizeof(silenceBuffer));
-                for (int i = 0; i < 8; i++)
+                    if (interruptPlayback)
+                    {
+                        Serial.println("Draining PCM TCP buffer after interrupt...");
+                        i2s_zero_dma_buffer(I2S_NUM);
+
+                        uint32_t drainStart = millis();
+                        while (client.connected() && (millis() - drainStart) < 1000)
+                        {
+                            if (client.available() > 0)
+                            {
+                                uint8_t dummy[512];
+                                int available = min(client.available(), 512);
+                                client.read(dummy, available);
+                            }
+                            else
+                            {
+                                delay(10);
+                            }
+                        }
+
+                        Serial.println("PCM TCP drain complete");
+                        interruptPlayback = false;
+                    }
+                } // end else (PCM handling)
+
+                // Only flush silence if not interrupted
+                if (!wasInterrupted)
                 {
-                    size_t bytesWritten = 0;
-                    i2s_write(I2S_NUM, silenceBuffer, sizeof(silenceBuffer), &bytesWritten, portMAX_DELAY);
+                    uint32_t silenceBuffer[240];
+                    memset(silenceBuffer, 0, sizeof(silenceBuffer));
+                    for (int i = 0; i < 8; i++)
+                    {
+                        size_t bytesWritten = 0;
+                        i2s_write(I2S_NUM, silenceBuffer, sizeof(silenceBuffer), &bytesWritten, portMAX_DELAY);
+                    }
                 }
-            }
 
-            isPlaying = false;
+                isPlaying = false;
 
-            if (!PTT_MODE && callActive) {
-                // VOX: enforce minimum 20s timeout after playback (server VAD extends when active)
-                // Skip if user double-tapped to end (callActive == false, mic_timeout already 0)
-                uint32_t timeout_ms = max((uint32_t)(timeout * 1000), (uint32_t)MIC_LISTEN_MS);
-                mic_timeout = millis() + timeout_ms;
-                Serial.println("Set mic_timeout to " + String(mic_timeout) + " (" + String(timeout_ms/1000) + "s)");
+                if (!PTT_MODE && deviceEnabled) {
+                    uint32_t timeout_ms = max((uint32_t)(timeout * 1000), (uint32_t)MIC_LISTEN_MS);
+                    mic_timeout = millis() + timeout_ms;
+                    Serial.println("Set mic_timeout to " + String(mic_timeout) + " (" + String(timeout_ms/1000) + "s)");
+                }
+                Serial.println("Done loading audio in buffers in " + String(millis() - tic) + "ms");
             }
-            Serial.println("Done loading audio in buffers in " + String(millis() - tic) + "ms");
-        }
-        /*
-        header[0]   0xBB for set LED command
-        header[1]   bitmask of which LED's to set
-        header[2:4] RGB color
-        */
-        else if (header[0] == 0xBB)
-        {
-            Serial.println("Received custom LED command (0xBB)");
-            setLed(0, 0, 0, 0, 0); // stop ramping down
-            uint8_t bitmask = header[1];
-            for (int i = 0; i < 6; i++)
+            /*
+            header[0]   0xBB for set LED command
+            header[1]   bitmask of which LED's to set
+            header[2:4] RGB color
+            */
+            else if (header[0] == 0xBB)
             {
-                if (bitmask & (1 << i))
+                Serial.println("Received custom LED command (0xBB)");
+                setLed(0, 0, 0, 0, 0);
+                uint8_t bitmask = header[1];
+                for (int i = 0; i < 6; i++)
                 {
-                    leds.setPixelColor(i, header[2], header[3], header[4]);
+                    if (bitmask & (1 << i))
+                    {
+                        leds.setPixelColor(i, header[2], header[3], header[4]);
+                    }
                 }
+                leds.show();
             }
-            leds.show();
-            client.stop();
-        }
-        /*
-        header[0]   0xCC for LED blink command
-        header[1]   starting intensity for rampdown
-        header[2:4] RGB color
-        header[5]   fade rate
-        */
-        else if (header[0] == 0xCC)
-        {
-            Serial.println("Received LED blink command (0xCC)");
-            setLed(header[2], header[3], header[4], header[1], header[5]);
-            client.stop();
-
-            // PTT doesn't use mic timeouts — skip extension logic
-            if (PTT_MODE) ;
-            else if(!callActive) ; // Don't extend mic if user ended the call
-            else if(mic_timeout > millis()) // if already listening...
+            /*
+            header[0]   0xCC for LED blink command
+            header[1]   starting intensity for rampdown
+            header[2:4] RGB color
+            header[5]   fade rate
+            */
+            else if (header[0] == 0xCC)
             {
-                if (mic_timeout < (millis() + VAD_MIC_EXTEND)) // and about to run out of time...
+                setLed(header[2], header[3], header[4], header[1], header[5]);
+
+                // PTT doesn't use mic timeouts — skip extension logic
+                if (PTT_MODE) ;
+                else if(!deviceEnabled) ;
+                else if(mic_timeout > millis())
                 {
-                    mic_timeout = millis() + VAD_MIC_EXTEND; // ... extend to not cut-off
-                    Serial.println("Extended mic timeout to " + String(mic_timeout));
+                    if (mic_timeout < (millis() + VAD_MIC_EXTEND))
+                    {
+                        mic_timeout = millis() + VAD_MIC_EXTEND;
+                        Serial.println("Extended mic timeout to " + String(mic_timeout));
+                    }
                 }
             }
-        }
-        /*
-        header[0]   0xDD for mic timeout command - added to stop listening while server is thinking
-        header[1:2] mic timeout in seconds typically set to 0 in this use case
-        header[3:5] not used
-        */
-        else if (header[0] == 0xDD)
-        {
-            Serial.println("Received mic timeout command (0xDD)");
-            uint16_t timeout = header[1] << 8 | header[2];
-            mic_timeout = millis() + (uint32_t)timeout * 1000;
-            client.stop();
-        }
-        else
-        {
-            Serial.println("Received unknown command");
-            setLed(255, 0, 0, 255, 6);
-            client.stop();
-        }
+            /*
+            header[0]   0xDD for mic timeout command (used by sesame-esp32-bridge)
+            header[1:2] mic timeout in seconds
+            header[3:5] not used
+            */
+            else if (header[0] == 0xDD)
+            {
+                Serial.println("Received mic timeout command (0xDD)");
+                uint16_t timeout = header[1] << 8 | header[2];
+                mic_timeout = millis() + (uint32_t)timeout * 1000;
+            }
+            else
+            {
+                Serial.println("Received unknown command");
+                setLed(255, 0, 0, 255, 6);
+                break; // unknown command, exit connection loop
+            }
+        } // end persistent connection loop
+
+tcp_cleanup:
+        client.stop();
     }
     delay(10);
 }
@@ -953,6 +934,8 @@ void micTask(void *pvParameters)
         bool currentState = false;
         if (isPlaying || mute) // don't listen while playing audio or muted
             ;
+        else if (!deviceEnabled) // device disabled by double-tap
+            ;
         else if (serverIP == IPAddress(0, 0, 0, 0)) // no server greeted us yet, so nowhere to send data
             ;
         else if (PTT_MODE && !pttHeld) // PTT: only send when button held
@@ -962,7 +945,6 @@ void micTask(void *pvParameters)
             if (prevState)
             {
                 Serial.println("Timeout reached");
-                // Don't set callActive = false — only double-tap should end the call
             }
         }
         else
@@ -1107,18 +1089,6 @@ void touchTask(void *parameter)
             }
         }
 
-        // Send disconnect signal from task context (not safe in ISR)
-        if (sendDisconnect) {
-            sendDisconnect = false;
-            if (serverIP != IPAddress(0, 0, 0, 0)) {
-                uint8_t disc = 0xFF;
-                for (int i = 0; i < 3; i++) {
-                    udp.beginPacket(serverIP, 3000);
-                    udp.write(&disc, 1);
-                    udp.endPacket();
-                }
-            }
-        }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
@@ -1167,8 +1137,8 @@ void gotTouch2() // center touch ISR
     } else {
         // First tap → act immediately
         handleShortPress();
-        // If in a call, also start watching for second tap
-        if (callActive) {
+        // If device is enabled, watch for second tap (double-tap to disable)
+        if (deviceEnabled) {
             firstTapTime = currentTime;
             waitingForSecondTap = true;
         }
@@ -1185,7 +1155,14 @@ void handleShortPress()
         return;
     }
 
-    if (isPlaying)
+    if (!deviceEnabled)
+    {
+        deviceEnabled = true;
+        mic_timeout = millis() + MIC_LISTEN_MS;
+        setLed(255, 255, 255, 255, 8); // bright white flash = device enabled
+        Serial.println("Device ENABLED");
+    }
+    else if (isPlaying)
     {
         Serial.println("Interrupting playback...");
         interruptPlayback = true;
@@ -1196,24 +1173,13 @@ void handleShortPress()
     else
     {
         mic_timeout = millis() + MIC_LISTEN_MS;
-
-        if (!callActive)
-        {
-            callActive = true;
-            setLed(255, 255, 255, 255, 8); // bright white flash = tap acknowledged
-            Serial.println("Call STARTING");
-            // Server will send a slow green pulse (0xCC) once the call is actually connected
-        }
-        else
-        {
-            setLed(255, 255, 255, 255, 8); // white flash = mic re-activated
-        }
+        setLed(255, 255, 255, 120, 8); // soft white pulse = mic re-activated
     }
 }
 
 void handleDoubleTap()
 {
-    Serial.println("Center touch: DOUBLE TAP - ending call");
+    Serial.println("Center touch: DOUBLE TAP - disabling device");
 
     mic_timeout = 0;
 
@@ -1223,12 +1189,11 @@ void handleDoubleTap()
         isPlaying = false;
     }
 
-    callActive = false;
-    sendDisconnect = true; // deferred to touchTask (UDP not safe in ISR)
+    deviceEnabled = false;
 
-    setLed(255, 40, 0, 200, 2); // slow red-orange pulse = call ended
+    setLed(255, 40, 0, 200, 2); // slow red-orange pulse = device disabled
 
-    Serial.println("Call ENDED");
+    Serial.println("Device DISABLED");
 }
 
 void enterConfigMode() {

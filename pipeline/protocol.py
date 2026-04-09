@@ -46,9 +46,38 @@ async def send_led_blink(ip: str, port: int, intensity: int, r: int = 255, g: in
     await send_tcp(ip, port, header, timeout=0.1)
 
 
-async def send_stop_listening(ip: str, port: int, hold_s: int = 30):
-    # header[0]   0xDD for mic timeout
-    # header[1:2] timeout in seconds — nonzero to keep callActive alive
-    #             on the device while server processes LLM + TTS
+async def send_stop_listening(ip: str, port: int, hold_s: int = 0):
+    """Unused by pipeline — kept for sesame-esp32-bridge compatibility."""
     header = bytes([0xDD, (hold_s >> 8) & 0xFF, hold_s & 0xFF, 0, 0, 0])
     await send_tcp(ip, port, header, timeout=0.2)
+
+
+async def open_led_connection(ip: str, port: int, timeout: float = 1) -> asyncio.StreamWriter | None:
+    """Open a persistent TCP connection for streaming LED blink commands."""
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(ip, port), timeout=timeout
+        )
+        return writer
+    except (asyncio.TimeoutError, ConnectionError, OSError):
+        return None
+
+
+def write_led_blink(writer: asyncio.StreamWriter, intensity: int,
+                    r: int = 255, g: int = 255, b: int = 255, fade: int = 6) -> bool:
+    """Write a LED blink command to an open connection. Non-async (6-byte buffer write)."""
+    header = bytes([0xCC, intensity, r, g, b, fade])
+    try:
+        writer.write(header)
+        return True
+    except (ConnectionError, OSError):
+        return False
+
+
+async def close_led_connection(writer: asyncio.StreamWriter):
+    """Close a persistent LED connection."""
+    try:
+        writer.close()
+        await writer.wait_closed()
+    except (ConnectionError, OSError):
+        pass

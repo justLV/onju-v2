@@ -21,6 +21,7 @@ class Device:
         self.last_response: str | None = None
         self.led_power = 0
         self.led_update_time = 0.0
+        self.vad_writer: asyncio.StreamWriter | None = None  # persistent TCP for LED blinks
 
         # PTT state
         self.ptt_buffer: list = []  # raw PCM frames during PTT

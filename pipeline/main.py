@@ -15,7 +15,7 @@ import yaml
 from pipeline.audio import decode_ulaw, opus_encode, opus_frames_to_tcp_payload, pcm_to_wav
 from pipeline.conversation import create_backend
 from pipeline.device import Device, DeviceManager
-from pipeline.protocol import send_audio, send_led_blink, send_stop_listening
+from pipeline.protocol import send_audio, send_led_blink, open_led_connection, write_led_blink, close_led_connection
 from pipeline.services import asr, tts
 
 log = logging.getLogger(__name__)
@@ -46,6 +46,8 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
     ptt_timeout = 0.5
     min_utterance_samples = int(sample_rate * 0.3)
     last_packet_time: dict[str, float] = {}
+    was_recording: dict[str, bool] = {}
+    max_led_intensity = 150
 
     while True:
         # Short timeout to detect PTT release (packet stream stops)
@@ -70,6 +72,10 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
 
                 # VOX device: flush if VAD was recording but packets stopped
                 elif not dev.ptt and dev.vad.recording:
+                    if dev.vad_writer is not None:
+                        await close_led_connection(dev.vad_writer)
+                        dev.vad_writer = None
+                    was_recording[hostname] = False
                     audio = np.concatenate(dev.vad.buffer) if dev.vad.buffer else None
                     dev.vad.reset()
                     if audio is not None and len(audio) > min_utterance_samples:
@@ -102,32 +108,46 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
                     device.interrupted.set()
                 continue
 
-            # LED feedback (only for VOX devices)
-            # Only send a new blink when VAD sees a peak — the device
-            # handles fade-down itself via updateLedTask.
-            prob = device.vad.speech_prob
-            new_level = int(prob * dev_cfg["led_power"]) if prob > 0.1 else 0
-            if new_level > device.led_power:
-                device.led_power = min(dev_cfg["led_power"], new_level)
+            # Track VAD recording transitions for persistent LED TCP
+            prev_recording = was_recording.get(device.hostname, False)
+            curr_recording = device.vad.recording
+
+            if curr_recording and not prev_recording:
+                # VAD just started recording — open persistent TCP for LED blinks
+                device.vad_writer = await open_led_connection(device.ip, tcp_port)
+
+            # LED feedback over persistent connection
+            if device.vad.speech_prob > 0.1:
+                device.led_power = min(max_led_intensity, device.led_power + dev_cfg["led_power"])
             if now - device.led_update_time > dev_cfg["led_update_period"]:
                 device.led_update_time = now
-                if device.led_power > 0:
-                    asyncio.create_task(
-                        send_led_blink(device.ip, tcp_port, device.led_power, fade=dev_cfg["led_fade"])
-                    )
-                    device.led_power = 0
+                if device.led_power > 0 and device.vad_writer is not None:
+                    if not write_led_blink(device.vad_writer, device.led_power, fade=dev_cfg["led_fade"]):
+                        device.vad_writer = None  # connection lost
+                device.led_power = 0
+
+            was_recording[device.hostname] = curr_recording
 
             if utterance is not None:
+                # Close persistent LED connection before queuing utterance
+                if device.vad_writer is not None:
+                    await close_led_connection(device.vad_writer)
+                    device.vad_writer = None
+                was_recording[device.hostname] = False
                 log.info(f"VAD  utterance from {device.hostname} ({len(utterance)/sample_rate:.1f}s)")
                 await utterance_queue.put((device, utterance))
 
 
 async def greet_device(device: Device, config: dict):
-    """Send greeting WAV to a device (Opus-encoded over TCP)."""
+    """Send greeting to a device. Always sends LED pulse for IP registration."""
     dev_cfg = config["device"]
     tcp_port = config["network"]["tcp_port"]
+
+    # Always send LED pulse so the device learns our IP
+    await send_led_blink(device.ip, tcp_port, intensity=100, r=0, g=255, b=50, fade=8)
+
     greeting_path = dev_cfg.get("greeting_wav")
-    if not dev_cfg.get("greeting", True) or not greeting_path or not os.path.exists(greeting_path):
+    if not dev_cfg.get("greeting") or not greeting_path or not os.path.exists(greeting_path):
         return
     try:
         from pydub import AudioSegment
@@ -180,10 +200,10 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
         device.interrupted.clear()
 
         try:
-            # Tell VOX devices to stop listening while we process.
-            # Uses a 30s hold so callActive stays true on the device.
-            if not device.ptt:
-                await send_stop_listening(device.ip, tcp_port)
+            # Safety: close any lingering LED connection before processing
+            if device.vad_writer is not None:
+                await close_led_connection(device.vad_writer)
+                device.vad_writer = None
 
             # ASR
             pcm_bytes = audio_int16.astype(np.int16).tobytes()

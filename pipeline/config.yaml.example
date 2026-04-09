@@ -54,15 +54,15 @@ network:
 
 audio:
   sample_rate: 16000
-  chunk_size: 480                            # 30ms at 16kHz
+  chunk_size: 512                            # 32ms at 16kHz (matches ESP32 SAMPLE_CHUNK_SIZE)
   opus_frame_size: 320                       # 20ms at 16kHz
 
 device:
   default_volume: 15
   default_mic_timeout: 60
-  led_fade: 6
-  led_power: 60
-  led_update_period: 0.2
+  led_fade: 2
+  led_power: 50
+  led_update_period: 0.25
   greeting: false
   greeting_wav: "data/hello_imhere.wav"
 
