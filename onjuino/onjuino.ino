@@ -1,6 +1,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <ESPmDNS.h>
+#include <esp_mac.h>
 #include <driver/i2s.h>
 #include <Adafruit_NeoPixel.h>
 #include <Preferences.h>
@@ -187,9 +188,11 @@ void setup()
     Serial.println("Touch enabled");
 #endif
 
-    // Build hostname from prefix + last 3 bytes of MAC: e.g. "onju-A1B2C3"
+    // Build hostname from prefix + last 3 bytes of MAC: e.g. "onju-A1B2C3".
+    // Use esp_read_mac (eFuse-backed) instead of WiFi.macAddress(); the latter
+    // returns all zeros before WiFi is fully initialized on arduino-esp32 v3.x.
     uint8_t mac[6];
-    WiFi.macAddress(mac);
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
     char desired_hostname[20];
     snprintf(desired_hostname, sizeof(desired_hostname), "%s-%02X%02X%02X", HOST_NAME, mac[3], mac[4], mac[5]);
 
@@ -544,44 +547,13 @@ void loop()
 
                     if (interruptPlayback)
                     {
-                        Serial.println("Draining TCP buffer after interrupt...");
+                        // Can't safely drain frame-aligned data — interrupt may have
+                        // happened mid-frame, leaving stray bytes that would misalign the
+                        // next header read. Just close the socket; bridge opens a fresh
+                        // connection for the next audio push.
+                        Serial.println("Closing TCP after interrupt");
                         i2s_zero_dma_buffer(I2S_NUM);
-
-                        uint32_t drainStart = millis();
-                        while (client.connected() && (millis() - drainStart) < 1000)
-                        {
-                            if (client.available() >= 2)
-                            {
-                                uint8_t len_bytes[2];
-                                client.read(len_bytes, 2);
-                                uint16_t frame_len = (len_bytes[0] << 8) | len_bytes[1];
-
-                                if (frame_len > 0 && frame_len <= OPUS_MAX_PACKET)
-                                {
-                                    size_t bytes_discarded = 0;
-                                    while (bytes_discarded < frame_len && client.available() > 0)
-                                    {
-                                        uint8_t dummy[256];
-                                        int to_read = min((int)(frame_len - bytes_discarded), 256);
-                                        int read_count = client.read(dummy, to_read);
-                                        if (read_count > 0)
-                                        {
-                                            bytes_discarded += read_count;
-                                        }
-                                        else
-                                        {
-                                            delay(1);
-                                        }
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                delay(10);
-                            }
-                        }
-
-                        Serial.println("TCP drain complete");
+                        client.stop();
                         interruptPlayback = false;
                     }
                     else
@@ -668,25 +640,10 @@ void loop()
 
                     if (interruptPlayback)
                     {
-                        Serial.println("Draining PCM TCP buffer after interrupt...");
+                        // Same rationale as Opus path: close socket rather than drain.
+                        Serial.println("Closing TCP after PCM interrupt");
                         i2s_zero_dma_buffer(I2S_NUM);
-
-                        uint32_t drainStart = millis();
-                        while (client.connected() && (millis() - drainStart) < 1000)
-                        {
-                            if (client.available() > 0)
-                            {
-                                uint8_t dummy[512];
-                                int available = min(client.available(), 512);
-                                client.read(dummy, available);
-                            }
-                            else
-                            {
-                                delay(10);
-                            }
-                        }
-
-                        Serial.println("PCM TCP drain complete");
+                        client.stop();
                         interruptPlayback = false;
                     }
                 } // end else (PCM handling)
@@ -739,17 +696,22 @@ void loop()
             */
             else if (header[0] == 0xCC)
             {
-                setLed(header[2], header[3], header[4], header[1], header[5]);
-
-                // PTT doesn't use mic timeouts — skip extension logic
-                if (PTT_MODE) ;
-                else if(!deviceEnabled) ;
-                else if(mic_timeout > millis())
+                // level==0 is a pure heartbeat/keepalive: don't touch LED state
+                // (setLed is not cumulative — calling it with level=0 would abruptly
+                // truncate any ongoing fade) and don't extend mic_timeout.
+                if (header[1] > 0)
                 {
-                    if (mic_timeout < (millis() + VAD_MIC_EXTEND))
+                    setLed(header[2], header[3], header[4], header[1], header[5]);
+
+                    if (PTT_MODE) ;
+                    else if (!deviceEnabled) ;
+                    else if (mic_timeout > millis())
                     {
-                        mic_timeout = millis() + VAD_MIC_EXTEND;
-                        Serial.println("Extended mic timeout to " + String(mic_timeout));
+                        if (mic_timeout < (millis() + VAD_MIC_EXTEND))
+                        {
+                            mic_timeout = millis() + VAD_MIC_EXTEND;
+                            Serial.println("Extended mic timeout to " + String(mic_timeout));
+                        }
                     }
                 }
             }
@@ -950,6 +912,7 @@ void micTask(void *pvParameters)
     int16_t offset = sum / (sizeof(micBuffer) / sizeof(micBuffer[0])) / MIC_OFFSET_AVERAGING_FRAMES;
 
     Serial.println("Calculated mic offset: " + String(offset));
+    Serial.println("Device: " + String(WiFi.getHostname()) + " @ " + WiFi.localIP().toString());
     if (abs(offset) > MAX_ALLOWED_OFFSET)
     {
         Serial.println("Calculated offset of is too large, using zero!");
@@ -1300,7 +1263,7 @@ void loadConfig() {
     Serial.println("Server: " + server_hostname);
     Serial.println("Mic Timeout: " + String(mic_timeout_default));
     Serial.println("Volume: " + String(speaker_volume));
-    Serial.println("Saved IP: " + serverIP.toString());
+    Serial.println("Saved server IP: " + serverIP.toString());
 }
 
 void saveConfig() {
