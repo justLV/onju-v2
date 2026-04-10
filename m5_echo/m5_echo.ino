@@ -4,6 +4,7 @@
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <esp_mac.h>
 #include <ESPmDNS.h>
 #include <driver/i2s.h>
 #include <Adafruit_NeoPixel.h>
@@ -22,6 +23,8 @@
 #define I2S_DIN       23
 
 #define HOST_NAME     "m5-echo"
+
+char desired_hostname[24];
 #define SAMPLE_RATE   16000
 #define SAMPLE_CHUNK  512
 
@@ -185,7 +188,7 @@ void loadConfig()
     if (savedIP != 0)
         serverIP = IPAddress(savedIP);
 
-    Serial.printf("SSID: %s\nServer: %s\nVolume: %d\nLED: %s\nSaved IP: %s\n",
+    Serial.printf("SSID: %s\nServer: %s\nVolume: %d\nLED: %s\nSaved server IP: %s\n",
                   wifi_ssid.c_str(), server_hostname.c_str(), speaker_volume,
                   ledEnabled ? "on" : "off", serverIP.toString().c_str());
 }
@@ -485,8 +488,16 @@ void setup()
 
     loadConfig();
 
-    // WiFi
-    WiFi.setHostname(HOST_NAME);
+    // Build hostname from prefix + last 3 bytes of MAC: e.g. "m5_echo_A1B2C3"
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(desired_hostname, sizeof(desired_hostname), "%s-%02X%02X%02X",
+             HOST_NAME, mac[3], mac[4], mac[5]);
+
+    WiFi.setHostname(desired_hostname);
+    Serial.print("Hostname: ");
+    Serial.println(desired_hostname);
+
     WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
     Serial.print("WiFi");
     while (WiFi.status() != WL_CONNECTED)
@@ -499,14 +510,16 @@ void setup()
             if (ch == 'c') { Serial.println(); enterConfigMode(); }
         }
     }
-    Serial.printf(" connected: %s\n", WiFi.localIP().toString().c_str());
+    Serial.println();
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
     setLed(0, 255, 50, 255, 10);
 
     // Network services
     udp.begin(3000);
     tcpServer.begin();
     tcpServer.setNoDelay(true);
-    MDNS.begin(HOST_NAME);
+    MDNS.begin(desired_hostname);
 
     // Resolve server — skip if we already have a saved IP from last session
     if (serverIP == IPAddress(0, 0, 0, 0) && server_hostname != DEFAULT_SERVER)
@@ -531,7 +544,7 @@ void setup()
 
     // Multicast announcement — include "PTT" so bridge auto-starts call
     udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);
-    String announce = String(HOST_NAME) + " m5echo PTT";
+    String announce = String(desired_hostname) + " m5echo PTT";
     udp.write((const uint8_t *)announce.c_str(), announce.length());
     udp.endPacket();
     Serial.println("Announced on multicast (PTT mode)");
@@ -543,6 +556,11 @@ void setup()
         Serial.printf("Opus decoder create failed: %d\n", opus_error);
     else
         Serial.println("Opus decoder initialized");
+
+    Serial.print("Device: ");
+    Serial.print(WiFi.getHostname());
+    Serial.print(" @ ");
+    Serial.println(WiFi.localIP());
 
     // Start in speaker mode
     initSpeakerI2S();
@@ -645,7 +663,7 @@ void loop()
         case 'A':
         {
             udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);
-            String a = String(HOST_NAME) + " m5echo PTT";
+            String a = String(desired_hostname) + " m5echo PTT";
             udp.write((const uint8_t *)a.c_str(), a.length());
             udp.endPacket();
             Serial.println("Announced (PTT)");

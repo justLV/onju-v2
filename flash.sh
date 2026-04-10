@@ -17,7 +17,7 @@ case "$TARGET" in
         PORT_GLOBS=("/dev/cu.usbmodem*")
         ;;
     m5_echo|m5echo)
-        FQBN="esp32:esp32:pico32:UploadSpeed=115200"
+        FQBN="esp32:esp32:m5stack_atom:UploadSpeed=1500000"
         PROJECT_DIR="$REPO/m5_echo"
         INO_NAME="m5_echo.ino"
         PORT_GLOBS=("/dev/cu.usbserial-*" "/dev/cu.usbmodem*")
