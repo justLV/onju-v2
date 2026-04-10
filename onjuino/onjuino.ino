@@ -64,11 +64,14 @@ volatile unsigned long lastTouchTimeLeft = 0;
 volatile unsigned long lastTouchTimeCenter = 0;
 volatile unsigned long lastTouchTimeRight = 0;
 const unsigned long TOUCH_DEBOUNCE_MS = 800; // 800ms between valid touches
+const unsigned long CENTER_DEBOUNCE_MS = 150; // shorter for center so double-tap window has room
 
-// Double-tap detection for center touch
-volatile unsigned long firstTapTime = 0;
-volatile bool waitingForSecondTap = false;
-const unsigned long DOUBLE_TAP_WINDOW_MS = 500;
+// Double-tap detection: requires a prior completed normal tap before arming.
+// Why: prevents accidental disable from cold start or back-to-back double-taps.
+volatile unsigned long lastTapTime = 0;
+volatile bool tapPendingArm = false;
+volatile bool doubleTapArmed = false;
+const unsigned long DOUBLE_TAP_WINDOW_MS = 700;
 const unsigned long MIC_LISTEN_MS = 20000; // 20s default (server VAD extends when needed)
 
 // Device enable state — toggled by double-tap, gates mic + audio playback
@@ -589,6 +592,7 @@ void loop()
                 // Handle PCM audio (compression_type == 0)
                 else
                 {
+                    unsigned long pcmReadStart = millis();
                     while (client.connected())
                     {
                         if (interruptPlayback)
@@ -608,6 +612,7 @@ void loop()
                             }
 
                             bytesRead = client.read(tcpBuffer, bytesToRead);
+                            pcmReadStart = millis();
 
                             for (size_t i = 0; i < bytesRead; i += 2)
                             {
@@ -644,6 +649,14 @@ void loop()
                                 }
                                 totalSamplesRead = 0;
                             }
+                        }
+                        else if (millis() - pcmReadStart > 2000)
+                        {
+                            // TCP froze with connection still open — force-close so we
+                            // don't loop the I2S DMA buffer indefinitely.
+                            Serial.println("PCM playback: TCP stalled, closing connection");
+                            client.stop();
+                            break;
                         }
                         else
                         {
@@ -794,8 +807,10 @@ void opusDecodeTask(void *pvParameters)
         // Read 2-byte frame length (ensure both bytes are read)
         uint8_t len_bytes[2];
         size_t len_read = 0;
+        unsigned long readStart = millis();
         while (len_read < 2)
         {
+            if (interruptPlayback) break;
             if (client->available() > 0)
             {
                 len_read += client->read(len_bytes + len_read, 2 - len_read);
@@ -804,12 +819,20 @@ void opusDecodeTask(void *pvParameters)
             {
                 break;
             }
+            else if (millis() - readStart > 2000)
+            {
+                // TCP froze with connection still open — force-close so the outer
+                // loop bails instead of looping the I2S DMA buffer indefinitely.
+                Serial.println("Opus task: TCP stalled waiting for frame length, closing connection");
+                client->stop();
+                break;
+            }
             else
             {
                 delay(1);
             }
         }
-        if (len_read < 2) break;
+        if (interruptPlayback || len_read < 2) break;
         uint16_t frame_len = (len_bytes[0] << 8) | len_bytes[1];
 
         // frame_len == 0 is the end-of-speech signal from the bridge
@@ -828,20 +851,29 @@ void opusDecodeTask(void *pvParameters)
 
         // Read Opus frame
         size_t bytes_read = 0;
+        unsigned long frameReadStart = millis();
         while (bytes_read < frame_len && (client->connected() || client->available()))
         {
+            if (interruptPlayback) break;
             int avail = client->available();
             if (avail > 0)
             {
                 int to_read = min(avail, (int)(frame_len - bytes_read));
                 bytes_read += client->read(opus_packet_buffer + bytes_read, to_read);
+                frameReadStart = millis();
+            }
+            else if (millis() - frameReadStart > 2000)
+            {
+                Serial.println("Opus task: TCP stalled mid-frame, closing connection");
+                client->stop();
+                break;
             }
             else
             {
                 delay(1);
             }
         }
-        if (bytes_read < frame_len) break;  // incomplete frame after disconnect
+        if (interruptPlayback || bytes_read < frame_len) break;  // incomplete frame, disconnect, or interrupt
 
         // Decode Opus frame
         int num_samples = opus_decode(opus_decoder, opus_packet_buffer, frame_len,
@@ -1070,10 +1102,10 @@ void touchTask(void *parameter)
                 pttHeld = true;
                 Serial.println("PTT: button DOWN");
 
-                // Interrupt playback if assistant is speaking
+                // Interrupt playback if assistant is speaking.
+                // Don't clear isPlaying here — let playback cleanup do it after I2S DMA is zeroed.
                 if (isPlaying) {
                     interruptPlayback = true;
-                    isPlaying = false;
                 }
 
                 setLed(0, 255, 30, 255, 10); // green = transmitting
@@ -1083,9 +1115,10 @@ void touchTask(void *parameter)
                 setLed(0, 100, 255, 100, 5); // dim blue = idle/listening
             }
         } else {
-            // VOX: clear double-tap window if it expired
-            if (waitingForSecondTap && (millis() - firstTapTime >= DOUBLE_TAP_WINDOW_MS)) {
-                waitingForSecondTap = false;
+            // VOX: promote a pending normal tap to armed once its window has elapsed
+            if (tapPendingArm && (millis() - lastTapTime >= DOUBLE_TAP_WINDOW_MS)) {
+                tapPendingArm = false;
+                doubleTapArmed = true;
             }
         }
 
@@ -1127,32 +1160,41 @@ void gotTouch2() // center touch ISR
     if (PTT_MODE) return;
 
     unsigned long currentTime = millis();
-    if (currentTime - lastTouchTimeCenter < 300) return; // debounce
+    if (currentTime - lastTouchTimeCenter < CENTER_DEBOUNCE_MS) return;
     lastTouchTimeCenter = currentTime;
 
-    if (waitingForSecondTap && (currentTime - firstTapTime < DOUBLE_TAP_WINDOW_MS)) {
-        // Second tap within window → double-tap = end call
-        waitingForSecondTap = false;
+    if (doubleTapArmed && (currentTime - lastTapTime < DOUBLE_TAP_WINDOW_MS)) {
+        // Second tap of an armed pair → end call
+        doubleTapArmed = false;
+        tapPendingArm = false;
         handleDoubleTap();
+        return;
+    }
+
+    bool wasNormalTap = handleShortPress();
+    lastTapTime = currentTime;
+
+    // Only "real" normal taps (extend / interrupt) qualify to arm a future double-tap.
+    // No-ops (mute, no server) and re-enables reset arming so the next disable still
+    // requires another standalone normal tap first.
+    if (wasNormalTap) {
+        tapPendingArm = true;
     } else {
-        // First tap → act immediately
-        handleShortPress();
-        // If device is enabled, watch for second tap (double-tap to disable)
-        if (deviceEnabled) {
-            firstTapTime = currentTime;
-            waitingForSecondTap = true;
-        }
+        tapPendingArm = false;
+        doubleTapArmed = false;
     }
 }
 
-void handleShortPress()
+// Returns true if this tap was a "real" normal tap on an already-enabled device
+// (extending listen or interrupting playback). Returns false for no-ops and re-enables.
+bool handleShortPress()
 {
     Serial.println("Center touch: SHORT PRESS");
 
     if (mute || serverIP == IPAddress(0, 0, 0, 0))
     {
         setLed(255, 30, 0, 255, 10);
-        return;
+        return false;
     }
 
     if (!deviceEnabled)
@@ -1161,20 +1203,23 @@ void handleShortPress()
         mic_timeout = millis() + MIC_LISTEN_MS;
         setLed(255, 255, 255, 255, 8); // bright white flash = device enabled
         Serial.println("Device ENABLED");
+        return false;
     }
-    else if (isPlaying)
+
+    if (isPlaying)
     {
         Serial.println("Interrupting playback...");
+        // Don't clear isPlaying here — playback cleanup zeroes I2S DMA before clearing it,
+        // otherwise the mic loop can reopen while the speaker tail is still audible.
         interruptPlayback = true;
-        isPlaying = false;
         mic_timeout = millis() + MIC_LISTEN_MS;
         setLed(255, 255, 255, 255, 8);
+        return true;
     }
-    else
-    {
-        mic_timeout = millis() + MIC_LISTEN_MS;
-        setLed(255, 255, 255, 120, 8); // soft white pulse = mic re-activated
-    }
+
+    mic_timeout = millis() + MIC_LISTEN_MS;
+    setLed(255, 255, 255, 120, 8); // soft white pulse = mic re-activated
+    return true;
 }
 
 void handleDoubleTap()
@@ -1185,8 +1230,8 @@ void handleDoubleTap()
 
     if (isPlaying)
     {
+        // Let playback cleanup clear isPlaying after I2S DMA is zeroed.
         interruptPlayback = true;
-        isPlaying = false;
     }
 
     deviceEnabled = false;
