@@ -227,16 +227,25 @@ See [`pipeline/config.yaml.example`](pipeline/config.yaml.example) for all optio
 
 ## Testing
 
+All scripts are in `tests/` and should be run from the project root.
+
 ```bash
 # Emulate an ESP32 device (no hardware needed)
-python test_client.py                  # localhost
-python test_client.py 192.168.1.50     # remote server
+python tests/test_client.py                  # localhost
+python tests/test_client.py 192.168.1.50     # remote server
 
 # Test speaker output (send audio file to device w/ TCP and Opus encoding)
-python test_speaker.py <device-ip>
+python tests/test_speaker.py <device-ip>
 
 # Test mic input (receive and record UDP audio)
-python test_mic.py --duration 10
+python tests/test_mic.py --duration 10
+
+# Benchmark the stall classifier against the configured Gemini endpoint
+python tests/test_stall.py
+
+# Inspect raw SSE chunk shapes from the configured agentic gateway
+python tests/test_stream.py
+python tests/test_stream.py "your prompt here"
 
 # Serial monitor (auto-detects USB port)
 python serial_monitor.py test.wav
