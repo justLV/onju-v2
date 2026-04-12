@@ -19,6 +19,7 @@ build/
 # Secrets & local config
 pipeline/config.yaml
 m5_echo/credentials.h
+m5_echo/git_hash.h
 
 # Runtime data & test output
 data/

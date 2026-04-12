@@ -49,7 +49,7 @@ Uses the same TCP/UDP protocol as onjuino:
 
 - **UDP 3000**: Mic audio (mu-law encoded, 512 samples/packet)
 - **TCP 3001**: Server commands (0xAA audio, 0xBB LED set, 0xCC LED blink, 0xDD mic timeout)
-- **Multicast**: Device announces as `"m5-echo m5echo PTT"` on the configured multicast group
+- **Multicast**: Device announces as `"<hostname> <git-hash> PTT"` on the configured multicast group
 
 The `PTT` token in the multicast announcement tells the server to auto-start a call on discovery and keep the TCP connection open persistently (no silence-based disconnection).
 

@@ -14,6 +14,12 @@
 #include "credentials.h"
 #include "audio_compression.h"
 
+#if __has_include("git_hash.h")
+#include "git_hash.h"
+#else
+#define GIT_HASH "------"
+#endif
+
 // ATOM Echo hardware
 #define BUTTON_PIN    39
 #define LED_PIN       27
@@ -497,6 +503,7 @@ void setup()
     WiFi.setHostname(desired_hostname);
     Serial.print("Hostname: ");
     Serial.println(desired_hostname);
+    Serial.println("Git hash:" + String(GIT_HASH));
 
     WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
     Serial.print("WiFi");
@@ -513,6 +520,7 @@ void setup()
     Serial.println();
     Serial.print("IP: ");
     Serial.println(WiFi.localIP());
+
     setLed(0, 255, 50, 255, 10);
 
     // Network services
@@ -544,7 +552,7 @@ void setup()
 
     // Multicast announcement — include "PTT" so bridge auto-starts call
     udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);
-    String announce = String(desired_hostname) + " m5echo PTT";
+    String announce = String(desired_hostname) + " " + String(GIT_HASH) + " PTT";
     udp.write((const uint8_t *)announce.c_str(), announce.length());
     udp.endPacket();
     Serial.println("Announced on multicast (PTT mode)");
@@ -560,7 +568,10 @@ void setup()
     Serial.print("Device: ");
     Serial.print(WiFi.getHostname());
     Serial.print(" @ ");
-    Serial.println(WiFi.localIP());
+    Serial.print(WiFi.localIP());
+    Serial.print(" (");
+    Serial.print(GIT_HASH);
+    Serial.println(")");
 
     // Start in speaker mode
     initSpeakerI2S();
@@ -663,7 +674,7 @@ void loop()
         case 'A':
         {
             udp.beginPacket(IPAddress(239, 0, 0, 1), 12345);
-            String a = String(desired_hostname) + " m5echo PTT";
+            String a = String(desired_hostname) + " " + String(GIT_HASH) + " PTT";
             udp.write((const uint8_t *)a.c_str(), a.length());
             udp.endPacket();
             Serial.println("Announced (PTT)");

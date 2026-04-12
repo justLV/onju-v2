@@ -141,6 +141,17 @@ fi
 echo ""
 
 # -------------------------------------------------------
+# Generate git_hash.h (rewrite only on change to avoid recompile churn)
+# -------------------------------------------------------
+GIT_HASH=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo "------")
+GIT_HASH_FILE="$PROJECT_DIR/git_hash.h"
+NEW_CONTENT="#define GIT_HASH \"${GIT_HASH}\""
+if [ ! -f "$GIT_HASH_FILE" ] || [ "$(cat "$GIT_HASH_FILE")" != "$NEW_CONTENT" ]; then
+    echo "$NEW_CONTENT" > "$GIT_HASH_FILE"
+    echo "Updated git_hash.h to ${GIT_HASH}"
+fi
+
+# -------------------------------------------------------
 # Check if compile is needed
 # -------------------------------------------------------
 NEEDS_COMPILE=true

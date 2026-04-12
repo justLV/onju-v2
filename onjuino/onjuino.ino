@@ -912,7 +912,7 @@ void micTask(void *pvParameters)
     int16_t offset = sum / (sizeof(micBuffer) / sizeof(micBuffer[0])) / MIC_OFFSET_AVERAGING_FRAMES;
 
     Serial.println("Calculated mic offset: " + String(offset));
-    Serial.println("Device: " + String(WiFi.getHostname()) + " @ " + WiFi.localIP().toString());
+    Serial.println("Device: " + String(WiFi.getHostname()) + " @ " + WiFi.localIP().toString() + " (" + String(GIT_HASH) + ")");
     if (abs(offset) > MAX_ALLOWED_OFFSET)
     {
         Serial.println("Calculated offset of is too large, using zero!");
