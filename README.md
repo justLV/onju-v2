@@ -12,7 +12,7 @@ This repo consists of:
 
 ## What's new in v2
 
-* **OpenClaw managed backend** 🦞 -- delegate conversation history and session management to an [OpenClaw](https://github.com/openclaw) gateway for centralized, multi-device orchestration
+* **Agentic backend** 🦞 -- delegate conversation history, session management, and tool execution to an [OpenClaw](https://github.com/openclaw) gateway for centralized, multi-device orchestration
 * **Opus compression** -- 14-16x downstream compression (server to speaker) for better audio quality over WiFi
 * **Streaming-ready architecture** -- designed for sentence-level TTS streaming and agentic tool-calling loops
 * **Modular async pipeline** -- replaced the monolithic server with a pluggable architecture for ASR, LLM, and TTS backends etc.
@@ -85,9 +85,19 @@ A zero-length Opus frame (`0x00 0x00`) signals end of speech.
 
 The pipeline supports two conversation backends, selectable via `config.yaml`:
 
-**Local** (`conversation.backend: "local"`): Manages conversation history locally with per-device JSON persistence. Sends the full message history on each LLM request. Works with any OpenAI-compatible endpoint.
+**Conversational** (`conversation.backend: "conversational"`): Plain chat-completions backend. Manages conversation history client-side with per-device JSON persistence and sends the full message history on each LLM request. Works with any OpenAI-compatible endpoint (OpenRouter, Gemini, Ollama, mlx_lm.server, etc.). Good for simple voice chat with no tool use.
 
-**OpenClaw Managed** (`conversation.backend: "managed"`): Delegates session management to an [OpenClaw](https://github.com/openclaw) gateway. Only sends the latest user message -- OpenClaw tracks history server-side using the device ID as the session key. Set `OPENCLAW_GATEWAY_TOKEN` in your environment and point `base_url` at your gateway.
+**Agentic** (`conversation.backend: "agentic"`): Delegates session management and tool execution to a remote agent gateway like [OpenClaw](https://github.com/openclaw). Only sends the latest user message — the gateway tracks history server-side using the device ID as the session key, and runs its own tool loop (web search, file access, multi-step work). Set `OPENCLAW_GATEWAY_TOKEN` in your environment and point `base_url` at your gateway.
+
+### Streaming and stalls
+
+Agentic requests can take 5-60+ seconds while the gateway runs tools, so the pipeline is built to make that wait feel responsive.
+
+**Sentence-level streaming.** The agent's SSE response is consumed delta by delta. A splitter (`pipeline/conversation/__init__.py:sentence_chunks`) buffers text until it hits a sentence boundary, then hands the sentence to TTS and pushes the audio to the device. Any narration the agent emits between tool calls gets spoken aloud as it arrives, while the next tool runs in the background. Intermediate sends use `mic_timeout=0` so the mic only reopens after the final chunk.
+
+**Contextual stall phrases.** Before the main agent call, the pipeline fires a fast classifier that decides whether the question needs a brief spoken acknowledgment. Conversational questions return `NONE` and get no stall. Tool-needing questions get a short personality-matched phrase that plays within about a second while the agent works. The stall text is then injected back into the agent's user message as a parenthetical continuity note so it doesn't repeat itself. Configure in `conversation.stall`.
+
+**The first-turn caveat with OpenClaw.** OpenClaw's OpenAI-compatible endpoint buffers all content from the first agent turn until the first round of tool execution completes. If the model generates an opening sentence and then calls a tool, that sentence is held server-side until the tool finishes. Narration between *subsequent* tool rounds streams fine. This is why the stall classifier exists: it gives the user a fast spoken acknowledgment that bypasses the gateway's first-turn buffering. See `pipeline/conversation/stall.py`.
 
 ### Setting up OpenClaw
 
@@ -102,7 +112,7 @@ This will:
 2. Append a voice mode prompt to `~/.openclaw/workspace/AGENTS.md` (tells the agent to respond in concise, speech-friendly prose when the message channel is `onju-voice`)
 3. Restart the gateway
 
-Then set `conversation.backend: "managed"` in `pipeline/config.yaml` and ensure `OPENCLAW_GATEWAY_TOKEN` is set in your environment.
+Then set `conversation.backend: "agentic"` in `pipeline/config.yaml` and ensure `OPENCLAW_GATEWAY_TOKEN` is set in your environment.
 
 ## Installation
 
@@ -197,9 +207,10 @@ See [`pipeline/config.yaml.example`](pipeline/config.yaml.example) for all optio
 | Section | What it controls |
 |---|---|
 | `asr` | Speech-to-text service URL |
-| `conversation.backend` | `"local"` or `"managed"` (OpenClaw) |
-| `conversation.local` | LLM endpoint, model, system prompt, message history |
-| `conversation.managed` | OpenClaw gateway URL, auth token, message channel |
+| `conversation.backend` | `"conversational"` (plain chat) or `"agentic"` (OpenClaw, tools) |
+| `conversation.conversational` | LLM endpoint, model, system prompt, message history |
+| `conversation.agentic` | OpenClaw gateway URL, auth token, message channel |
+| `conversation.stall` | Fast classifier that decides if the agentic backend needs a brief spoken stall |
 | `tts` | TTS backend (`"elevenlabs"` or `"qwen3"`), voice settings |
 | `vad` | Voice activity detection thresholds and timing |
 | `network` | UDP/TCP/multicast ports |
@@ -209,9 +220,10 @@ See [`pipeline/config.yaml.example`](pipeline/config.yaml.example) for all optio
 
 | Variable | Used by |
 |---|---|
-| `OPENROUTER_API_KEY` | Local backend via OpenRouter (default) |
-| `ANTHROPIC_API_KEY` | Local backend via Anthropic API directly |
-| `OPENCLAW_GATEWAY_TOKEN` | Managed (OpenClaw) backend |
+| `OPENROUTER_API_KEY` | Conversational backend via OpenRouter |
+| `GEMINI_API_KEY` | Conversational backend via Gemini, and the stall classifier |
+| `ANTHROPIC_API_KEY` | Conversational backend via Anthropic API directly |
+| `OPENCLAW_GATEWAY_TOKEN` | Agentic (OpenClaw) backend |
 
 ## Testing
 

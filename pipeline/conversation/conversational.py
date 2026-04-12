@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+from typing import AsyncIterator
 
 from openai import AsyncOpenAI
 
@@ -12,8 +13,10 @@ def _resolve_env(value: str) -> str:
     return re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), value)
 
 
-class LocalConversation:
-    """Manages conversation history locally and sends full context to any OpenAI-compatible endpoint."""
+class ConversationalBackend:
+    """Simple chat-completions backend: manages conversation history on the
+    client and sends the full context to any OpenAI-compatible endpoint.
+    Good for plain LLM chat with no tool use."""
 
     def __init__(self, cfg: dict, device_id: str):
         self.cfg = cfg
@@ -34,28 +37,55 @@ class LocalConversation:
 
         self.messages: list[dict] = self._load() or [{"role": "system", "content": cfg["system_prompt"]}]
 
-    async def send(self, user_text: str) -> str:
-        self._sanitize()
-        self.messages.append({"role": "user", "content": user_text})
-
+    def _build_kwargs(self) -> dict:
         kwargs = dict(
             model=self.cfg["model"],
             messages=self.messages,
             max_tokens=self.cfg.get("max_tokens", 300),
         )
-        if self.cfg.get("thinking_budget") is not None:
-            kwargs["extra_body"] = {
-                "google": {"thinking_config": {"thinking_budget": self.cfg["thinking_budget"]}}
-            }
+        # Gemini 2.5 via OpenAI-compat: disable thinking with reasoning_effort.
+        # https://ai.google.dev/gemini-api/docs/openai
+        if self.cfg.get("reasoning_effort"):
+            kwargs["reasoning_effort"] = self.cfg["reasoning_effort"]
+        return kwargs
 
-        response = await self.client.chat.completions.create(**kwargs)
-        text = response.choices[0].message.content or ""
+    def _finalize(self, text: str) -> None:
         self.messages.append({"role": "assistant", "content": text})
         self._prune()
         self.save()
 
+    def _wrap_user(self, user_text: str, extra_context: str | None) -> str:
+        return f"{extra_context}\n\n{user_text}" if extra_context else user_text
+
+    async def send(self, user_text: str, extra_context: str | None = None) -> str:
+        self._sanitize()
+        self.messages.append({"role": "user", "content": self._wrap_user(user_text, extra_context)})
+
+        response = await self.client.chat.completions.create(**self._build_kwargs())
+        text = response.choices[0].message.content or ""
+        self._finalize(text)
         log.debug(f"[{self.device_id}] LLM: {text}")
         return text
+
+    async def stream(self, user_text: str, extra_context: str | None = None) -> AsyncIterator[str]:
+        self._sanitize()
+        self.messages.append({"role": "user", "content": self._wrap_user(user_text, extra_context)})
+
+        kwargs = self._build_kwargs()
+        kwargs["stream"] = True
+        stream = await self.client.chat.completions.create(**kwargs)
+
+        parts: list[str] = []
+        try:
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content or ""
+                if delta:
+                    parts.append(delta)
+                    yield delta
+        finally:
+            self._finalize("".join(parts))
 
     def reset(self) -> None:
         self.messages = [{"role": "system", "content": self.cfg["system_prompt"]}]

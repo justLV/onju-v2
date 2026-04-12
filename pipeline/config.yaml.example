@@ -2,17 +2,72 @@ asr:
   url: "http://localhost:8100"               # parakeet-asr-server
 
 conversation:
-  backend: "managed"                           # "managed" (e.g. OpenClaw) or "local" (conversational only)
+  backend: "agentic"                           # "agentic" (e.g. OpenClaw, with tools) or "conversational" (plain chat)
 
-  managed:
+  stall:
+    enabled: true                              # decide if a stall phrase is needed while the agent works
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+    api_key: "${GEMINI_API_KEY}"
+    model: "gemini-2.5-flash"
+    reasoning_effort: "none"                   # disable thinking for sub-second latency (Gemini 2.5 Flash only)
+    max_tokens: 200
+    timeout: 1.5                               # seconds; skip stall if slower than this
+    prompt: |
+      You are the bridge voice for a voice assistant. Your only job is to
+      decide if the user's latest utterance needs a brief spoken placeholder
+      while the assistant runs a slow information lookup in the background.
+
+      {recent_context}
+
+      The user just said: {user_text}
+
+      Output NONE if any of these apply:
+      - The assistant can answer from its own knowledge or creativity
+        (the assistant is itself a capable language model — facts,
+        jokes, opinions, explanations, general knowledge).
+      - It's conversational, small talk, a partial thought, or a
+        request for the assistant to keep talking ("go on", "tell me
+        more"). A follow-up that asks for NEW information about a
+        different parameter ("what about Saturday?", "same but for
+        Tuesday") is still a real lookup and should stall.
+      - The user is asking the assistant to DO something rather than
+        FIND something — any action verb like remember, save, schedule,
+        book, send, add, mark, delete, create, update. You are the
+        bridge voice, not the agent executing anything. You cannot
+        honestly promise an action from here, so let the agent confirm
+        it itself. This rule applies even if carrying out the action
+        happens to involve some internal lookup.
+
+      Only generate a stall if the user is asking a question whose answer
+      genuinely requires a slow external fetch — live web search, current
+      data, file read, API call, real-time info. Retrieval is the only
+      reason to stall.
+
+      When a lookup is needed, generate a three-to-seven-word spoken stall
+      ending with a period. Warm, present, friend energy. A tiny reaction
+      plus a signal that you're about to go look it up. If the user named a
+      place, person, or thing worth acknowledging, use its name rather than
+      "that". No predictions about the answer, no promises of action, no
+      call-center filler.
+
+      Output ONLY the stall phrase OR the literal word NONE. No quotes, no
+      explanation, no preamble.
+
+  agentic:
     base_url: "http://127.0.0.1:18789/v1"   # OpenClaw gateway
     api_key: "${OPENCLAW_GATEWAY_TOKEN}"     # env var reference
     model: "openclaw/default"
     max_tokens: 300
     message_channel: "onju-voice"            # x-openclaw-message-channel header
     # provider_model: "anthropic/claude-opus-4-6"  # optional: override backend LLM
+    voice_prompt: >-                            # prepended to every user message as a reminder
+      [voice: this is spoken input transcribed from a microphone and your entire
+      response will be read aloud by TTS on a small speaker. Write only plain
+      spoken prose — no markdown, no lists, no structured reports, no code. If
+      your research produces detailed findings, save them to a file and just
+      give a brief spoken summary. Remember, keep it conversational.]
 
-  local:
+  conversational:
     base_url: "https://openrouter.ai/api/v1"  # OpenRouter, Ollama, mlx_lm.server, Gemini, etc.
     api_key: "${OPENROUTER_API_KEY}"           # set key or use ${ENV_VAR} reference
     model: "anthropic/claude-haiku-4.5"
@@ -20,7 +75,7 @@ conversation:
     max_tokens: 300
     system_prompt: "You are a helpful voice assistant. Keep responses concise (under 2 sentences)."
     persist_dir: "data/conversations"          # per-device message history (omit to disable)
-    # Local example (Ollama):
+    # Fully local example (Ollama):
     # base_url: "http://localhost:11434/v1"
     # api_key: "none"
     # model: "gemma4:e4b"

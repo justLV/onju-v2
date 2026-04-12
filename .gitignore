@@ -26,5 +26,9 @@ logs/
 *.wav
 !data/.gitkeep
 
+# Local debug scripts (may contain personal test queries)
+test_stall.py
+test_stream.py
+
 # Claude
 .claude/

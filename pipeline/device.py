@@ -24,6 +24,7 @@ class Device:
             self.voice = el_cfg.get("default_voice", "Emma")
         self.ptt = ptt
         self.vad = None if ptt else VAD(config)
+        self.last_user_text: str | None = None
         self.last_response: str | None = None
         self.led_power = 0
         self.led_update_time = 0.0

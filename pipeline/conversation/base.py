@@ -1,10 +1,14 @@
-from typing import Protocol, runtime_checkable
+from typing import AsyncIterator, Protocol, runtime_checkable
 
 
 @runtime_checkable
 class ConversationBackend(Protocol):
-    async def send(self, user_text: str) -> str:
-        """Send a user message, return the assistant's response."""
+    async def send(self, user_text: str, extra_context: str | None = None) -> str:
+        """Send a user message, return the full assistant response."""
+        ...
+
+    def stream(self, user_text: str, extra_context: str | None = None) -> AsyncIterator[str]:
+        """Send a user message, yield assistant text deltas as they arrive."""
         ...
 
     def reset(self) -> None:

@@ -13,7 +13,8 @@ import numpy as np
 import yaml
 
 from pipeline.audio import decode_ulaw, opus_encode, opus_frames_to_tcp_payload, pcm_to_wav
-from pipeline.conversation import create_backend
+from pipeline.conversation import create_backend, sentence_chunks
+from pipeline.conversation import stall as stall_mod
 from pipeline.device import Device, DeviceManager
 from pipeline.protocol import send_audio, send_led_blink, open_led_connection, write_led_blink, close_led_connection
 from pipeline.services import asr, tts
@@ -94,9 +95,13 @@ async def udp_listener(config: dict, manager: DeviceManager, utterance_queue: as
         pcm = decode_ulaw(data)
 
         if device.ptt:
-            # PTT: just buffer, no VAD needed
-            if device.processing:
-                continue
+            # PTT frames arriving while we're still responding means the user
+            # pressed the button to interrupt. The button press is the intent
+            # signal; keep buffering so these frames become the next utterance
+            # once the current turn bails out.
+            if device.processing and not device.interrupted.is_set():
+                log.info(f"PTT  interrupt from {device.hostname}")
+                device.interrupted.set()
             device.ptt_buffer.append(pcm)
         else:
             # VOX: run VAD
@@ -228,41 +233,163 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
                 log.info(f"Interrupted before LLM")
                 continue
 
-            # Conversation
+            # Streaming LLM → sentence-buffered TTS → Opus → TCP.
+            # Intermediate sends use mic_timeout=0 so the mic only reopens after
+            # the final chunk has played out.
+            sample_rate = config["audio"]["sample_rate"]
+            opus_frame_size = config["audio"]["opus_frame_size"]
+
+            turn_t0 = time.monotonic()
+            full_response: list[str] = []
+            pending: str | None = None   # sentence waiting to be flushed
+            sent_partial = False           # any non-final chunk already sent?
+            first_sentence_at: float | None = None
+            stream_start_at: float | None = None
+
+            async def send_sentence(sentence: str, is_final: bool) -> bool:
+                """Synthesize, encode, and push one sentence. Returns True on
+                success, False if interrupted or TTS failed."""
+                nonlocal sent_partial
+                if device.interrupted.is_set():
+                    log.info(f"Interrupted before TTS")
+                    return False
+                try:
+                    pcm = await tts.synthesize(sentence, device.voice, config)
+                except Exception as e:
+                    log.error(f"TTS  failed: {e}")
+                    return False
+                if device.interrupted.is_set():
+                    log.info(f"Interrupted before send")
+                    return False
+                frames = opus_encode(pcm, sample_rate, opus_frame_size)
+                payload = opus_frames_to_tcp_payload(frames)
+                mic_timeout = dev_cfg["default_mic_timeout"] if is_final else 0
+                log.info(f"SEND  [+{time.monotonic() - turn_t0:.2f}s] "
+                         f"{len(frames)} opus frames to {device.ip} "
+                         f"({'final' if is_final else 'partial'}: {sentence!r})")
+                await send_audio(device.ip, tcp_port, payload,
+                                 mic_timeout=mic_timeout,
+                                 volume=dev_cfg["default_volume"],
+                                 fade=dev_cfg["led_fade"])
+                if not is_final:
+                    sent_partial = True
+                return True
+
+            async def reopen_mic_if_needed():
+                """If we already sent partial audio with mic_timeout=0, the mic
+                is closed — push an empty audio to reopen it on recovery."""
+                if sent_partial and not device.ptt:
+                    try:
+                        await send_audio(device.ip, tcp_port, b"",
+                                         mic_timeout=dev_cfg["default_mic_timeout"],
+                                         volume=0, fade=0)
+                    except Exception:
+                        pass
+
+            # Stall decision (agentic mode only; blocking, capped by config timeout).
+            # Passes the previous exchange so the classifier can recognize
+            # continuations ("go on") and prefaces ("one more thing") as
+            # conversational rather than tool-needing.
+            stall_text: str | None = None
+            if config["conversation"].get("backend") == "agentic":
+                stall_text = await stall_mod.decide_stall(
+                    text,
+                    config,
+                    prev_user=device.last_user_text,
+                    prev_assistant=device.last_response,
+                )
+                stall_decided_at = time.monotonic() - turn_t0
+                if stall_text:
+                    log.info(f"STALL [+{stall_decided_at:.2f}s] decided: {stall_text!r}")
+                else:
+                    log.info(f"STALL [+{stall_decided_at:.2f}s] NONE")
+            device.last_user_text = text
+
+            # Fire stall TTS+send in parallel with OpenClaw warming up.
+            stall_task: asyncio.Task | None = None
+            extra_context: str | None = None
+            if stall_text:
+                stall_task = asyncio.create_task(send_sentence(stall_text, is_final=False))
+                extra_context = (
+                    f"(You already said aloud to the user: \"{stall_text}\" — "
+                    f"don't repeat this phrase, continue naturally with the answer.)"
+                )
+
+            aborted = False
             try:
-                response_text = await device.conversation.send(text)
+                stream_start_at = time.monotonic()
+                async for sentence in sentence_chunks(
+                    device.conversation.stream(text, extra_context=extra_context)
+                ):
+                    full_response.append(sentence)
+                    if first_sentence_at is None:
+                        first_sentence_at = time.monotonic()
+                        ttfs_turn = first_sentence_at - turn_t0
+                        ttfs_stream = first_sentence_at - stream_start_at
+                        log.info(f"LLM  first sentence [+{ttfs_turn:.2f}s turn / "
+                                 f"{ttfs_stream:.2f}s stream]: {sentence}")
+                    else:
+                        log.debug(f"LLM  sentence: {sentence}")
+
+                    # Make sure the stall audio has finished sending before we
+                    # start pushing OpenClaw content to the device.
+                    if stall_task is not None and not stall_task.done():
+                        await stall_task
+                        stall_task = None
+
+                    # Flush the *previous* sentence as non-final; whichever
+                    # sentence is last when the stream ends becomes the final.
+                    if pending is not None:
+                        if not await send_sentence(pending, is_final=False):
+                            aborted = True
+                            break
+                    pending = sentence
             except Exception as e:
                 log.error(f"LLM  failed: {e}")
+                if stall_task is not None:
+                    try:
+                        await stall_task
+                    except Exception:
+                        pass
+                await reopen_mic_if_needed()
                 continue
+
+            # Drain the stall task if it's still pending (e.g. LLM stream
+            # returned zero content).
+            if stall_task is not None:
+                try:
+                    await stall_task
+                except Exception:
+                    pass
+                stall_task = None
+
+            if aborted:
+                await reopen_mic_if_needed()
+                continue
+
+            if pending is not None:
+                if not await send_sentence(pending, is_final=True):
+                    await reopen_mic_if_needed()
+                    continue
+            elif sent_partial:
+                # The stall played but OpenClaw returned nothing — reopen mic.
+                if not device.ptt:
+                    await send_audio(device.ip, tcp_port, b"",
+                                     mic_timeout=dev_cfg["default_mic_timeout"],
+                                     volume=0, fade=0)
+            elif not device.ptt:
+                # No content from the LLM and no stall — still reopen the mic.
+                await send_audio(device.ip, tcp_port, b"",
+                                 mic_timeout=dev_cfg["default_mic_timeout"],
+                                 volume=0, fade=0)
+
+            response_text = " ".join(full_response)
             device.last_response = response_text
-            log.info(f"LLM  {response_text}")
-
-            # Check for interrupt before TTS
-            if device.interrupted.is_set():
-                log.info(f"Interrupted before TTS")
-                continue
-
-            # TTS
-            try:
-                pcm_response = await tts.synthesize(response_text, device.voice, config)
-                log.info(f"TTS  {len(pcm_response)} bytes ({len(pcm_response)/32000:.1f}s)")
-            except Exception as e:
-                log.error(f"TTS  failed: {e}")
-                continue
-
-            # Check for interrupt before sending audio
-            if device.interrupted.is_set():
-                log.info(f"Interrupted before send")
-                continue
-
-            # Opus encode and send
-            frames = opus_encode(pcm_response, config["audio"]["sample_rate"], config["audio"]["opus_frame_size"])
-            payload = opus_frames_to_tcp_payload(frames)
-            log.info(f"SEND  {len(frames)} opus frames to {device.ip}")
-            await send_audio(device.ip, tcp_port, payload,
-                             mic_timeout=dev_cfg["default_mic_timeout"],
-                             volume=dev_cfg["default_volume"],
-                             fade=dev_cfg["led_fade"])
+            elapsed = time.monotonic() - turn_t0
+            ttfs = f"{first_sentence_at - turn_t0:.2f}s" if first_sentence_at else "—"
+            log.info(f"LLM  [{ttfs} first / {elapsed:.2f}s total / "
+                     f"{len(full_response)} sentences / {len(response_text)} chars] "
+                     f"{response_text}")
 
         except Exception as e:
             log.error(f"Pipeline error ({device.hostname}): {e}")
@@ -372,6 +499,41 @@ def _http_respond(writer: asyncio.StreamWriter, status: int, body: str):
     writer.write(f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n{body}".encode())
 
 
+def _log_startup_summary(config: dict) -> None:
+    """Log the active endpoints and models so it's obvious at a glance how the
+    pipeline is configured for this run."""
+    conv_cfg = config["conversation"]
+    backend_name = conv_cfg.get("backend", "conversational")
+    backend_cfg = conv_cfg.get(backend_name, {})
+
+    log.info("Pipeline server starting")
+    log.info(f"  ASR   {config['asr']['url']}")
+
+    if backend_name == "agentic":
+        model = backend_cfg.get("provider_model") or backend_cfg.get("model", "?")
+        log.info(f"  LLM   agentic: {model} @ {backend_cfg.get('base_url', '?')} "
+                 f"(channel={backend_cfg.get('message_channel', '?')})")
+        stall_cfg = conv_cfg.get("stall", {})
+        if stall_cfg.get("enabled"):
+            log.info(f"  STALL {stall_cfg.get('model', '?')} @ {stall_cfg.get('base_url', '?')} "
+                     f"(timeout={stall_cfg.get('timeout', 1.5)}s)")
+        else:
+            log.info("  STALL disabled")
+    else:
+        log.info(f"  LLM   conversational: {backend_cfg.get('model', '?')} "
+                 f"@ {backend_cfg.get('base_url', '?')}")
+
+    tts_cfg = config["tts"]
+    tts_backend = tts_cfg.get("backend", "?")
+    if tts_backend == "elevenlabs":
+        el = tts_cfg.get("elevenlabs", {})
+        vox = el.get("default_voice", "?")
+        ptt = el.get("default_voice_ptt", vox)
+        log.info(f"  TTS   elevenlabs: VOX={vox} PTT={ptt}")
+    else:
+        log.info(f"  TTS   {tts_backend}")
+
+
 async def warmup(config: dict):
     """Validate conversation backend and TTS are reachable."""
     log.info("Warming up conversation backend and TTS...")
@@ -446,7 +608,7 @@ async def main(config_path: str = None, do_warmup: bool = False, devices: list[s
 
     utterance_queue = asyncio.Queue()
 
-    log.info("Pipeline server starting")
+    _log_startup_summary(config)
     await asyncio.gather(
         udp_listener(config, manager, utterance_queue),
         multicast_listener(config, manager),
