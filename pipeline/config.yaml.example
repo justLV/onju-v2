@@ -35,8 +35,10 @@ tts:
   elevenlabs:
     api_key: ""                              # your ElevenLabs API key
     default_voice: "Archer"
+    default_voice_ptt: "Emma"                # PTT devices (smaller speaker)
     voices:
       Archer: "Fahco4VZzobUeiPqni1S"        # British conversational male
+      Emma: "56bWURjYFHyYyVf490Dp"          # female, better on small speakers
       Rachel: "21m00Tcm4TlvDq8ikWAM"        # add your voice IDs here
 
 vad:

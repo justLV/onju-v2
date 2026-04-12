@@ -15,7 +15,13 @@ class Device:
         self.ip = ip
         self.config = config
         self.conversation = conversation
-        self.voice = voice or config["tts"].get("elevenlabs", {}).get("default_voice", "Rachel")
+        el_cfg = config["tts"].get("elevenlabs", {})
+        if voice:
+            self.voice = voice
+        elif ptt and el_cfg.get("default_voice_ptt"):
+            self.voice = el_cfg["default_voice_ptt"]
+        else:
+            self.voice = el_cfg.get("default_voice", "Emma")
         self.ptt = ptt
         self.vad = None if ptt else VAD(config)
         self.last_response: str | None = None
