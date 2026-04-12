@@ -89,16 +89,6 @@ The pipeline supports two conversation backends, selectable via `config.yaml`:
 
 **Agentic** (`conversation.backend: "agentic"`): Delegates session management and tool execution to a remote agent gateway like [OpenClaw](https://github.com/openclaw). Only sends the latest user message — the gateway tracks history server-side using the device ID as the session key, and runs its own tool loop (web search, file access, multi-step work). Set `OPENCLAW_GATEWAY_TOKEN` in your environment and point `base_url` at your gateway.
 
-### Streaming and stalls
-
-Agentic requests can take 5-60+ seconds while the gateway runs tools, so the pipeline is built to make that wait feel responsive.
-
-**Sentence-level streaming.** The agent's SSE response is consumed delta by delta. A splitter (`pipeline/conversation/__init__.py:sentence_chunks`) buffers text until it hits a sentence boundary, then hands the sentence to TTS and pushes the audio to the device. Any narration the agent emits between tool calls gets spoken aloud as it arrives, while the next tool runs in the background. Intermediate sends use `mic_timeout=0` so the mic only reopens after the final chunk.
-
-**Contextual stall phrases.** Before the main agent call, the pipeline fires a fast classifier that decides whether the question needs a brief spoken acknowledgment. Conversational questions return `NONE` and get no stall. Tool-needing questions get a short personality-matched phrase that plays within about a second while the agent works. The stall text is then injected back into the agent's user message as a parenthetical continuity note so it doesn't repeat itself. Configure in `conversation.stall`.
-
-**The first-turn caveat with OpenClaw.** OpenClaw's OpenAI-compatible endpoint buffers all content from the first agent turn until the first round of tool execution completes. If the model generates an opening sentence and then calls a tool, that sentence is held server-side until the tool finishes. Narration between *subsequent* tool rounds streams fine. This is why the stall classifier exists: it gives the user a fast spoken acknowledgment that bypasses the gateway's first-turn buffering. See `pipeline/conversation/stall.py`.
-
 ### Setting up OpenClaw
 
 If you have [OpenClaw](https://github.com/openclaw) installed, a setup script is included:
@@ -113,6 +103,16 @@ This will:
 3. Restart the gateway
 
 Then set `conversation.backend: "agentic"` in `pipeline/config.yaml` and ensure `OPENCLAW_GATEWAY_TOKEN` is set in your environment.
+
+### Streaming and stalls w/ OpenClaw
+
+Agentic requests can take 5-60+ seconds while the gateway runs tools, so the pipeline is built to make that wait feel responsive.
+
+**Sentence-level streaming.** The agent's SSE response is consumed delta by delta. A splitter (`pipeline/conversation/__init__.py:sentence_chunks`) buffers text until it hits a sentence boundary, then hands the sentence to TTS and pushes the audio to the device. Any narration the agent emits between tool calls gets spoken aloud as it arrives, while the next tool runs in the background. Intermediate sends use `mic_timeout=0` so the mic only reopens after the final chunk.
+
+**Contextual stall phrases.** Before the main agent call, the pipeline fires a fast classifier that decides whether the question needs a brief spoken acknowledgment. Conversational questions return `NONE` and get no stall. Tool-needing questions get a short personality-matched phrase that plays within about a second while the agent works. The stall text is then injected back into the agent's user message as a parenthetical continuity note so it doesn't repeat itself. Configure in `conversation.stall`.
+
+**The first-turn caveat with OpenClaw.** OpenClaw's OpenAI-compatible endpoint buffers all content from the first agent turn until the first round of tool execution completes. If the model generates an opening sentence and then calls a tool, that sentence is held server-side until the tool finishes. Narration between *subsequent* tool rounds streams fine. This is why the stall classifier exists: it gives the user a fast spoken acknowledgment that bypasses the gateway's first-turn buffering. See `pipeline/conversation/stall.py`.
 
 ## Installation
 
