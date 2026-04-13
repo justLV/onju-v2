@@ -20,7 +20,7 @@ This repo consists of:
 * **Pluggable TTS** -- ElevenLabs (recommended) or local via [mlx-audio](https://github.com/lucasnewman/mlx-audio) for fully offline operation
 * **Silero VAD** -- server-side voice activity detection with configurable thresholds, replacing webrtcvad
 * **VAD-aware interruption** -- tap to interrupt playback and start speaking immediately
-* **M5 Echo support** -- get started with a [$13 dev kit](https://shop.m5stack.com/products/atom-echo-smart-speaker-dev-kit) instead of ordering a custom PCB
+* **M5 Echo support** -- get started with a [$13 dev kit](https://shop.m5stack.com/products/atom-echo-smart-speaker-dev-kit) instead of ordering a custom PCB ([battery base](https://shop.m5stack.com/products/atomic-battery-base-200mah)
 * **One-command flashing** -- `./flash.sh` handles compilation, WiFi credential generation (from macOS Keychain), and upload. No Arduino IDE or manual configuration required
 
 ## Supported devices
