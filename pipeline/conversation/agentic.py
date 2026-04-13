@@ -68,6 +68,9 @@ class AgenticBackend:
             if delta:
                 yield delta
 
+    def commit(self, text: str) -> None:
+        pass  # remote service owns history
+
     def reset(self) -> None:
         pass  # session reset would require an API call if supported
 

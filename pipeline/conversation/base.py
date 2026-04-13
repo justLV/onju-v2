@@ -11,6 +11,11 @@ class ConversationBackend(Protocol):
         """Send a user message, yield assistant text deltas as they arrive."""
         ...
 
+    def commit(self, text: str) -> None:
+        """Persist the assistant response after successful delivery. Call
+        only after the turn actually played out. No-op for managed backends."""
+        ...
+
     def reset(self) -> None:
         """Clear conversation history / start a new session."""
         ...

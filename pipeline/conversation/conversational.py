@@ -75,17 +75,17 @@ class ConversationalBackend:
         kwargs["stream"] = True
         stream = await self.client.chat.completions.create(**kwargs)
 
-        parts: list[str] = []
-        try:
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta.content or ""
-                if delta:
-                    parts.append(delta)
-                    yield delta
-        finally:
-            self._finalize("".join(parts))
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content or ""
+            if delta:
+                yield delta
+
+    def commit(self, text: str) -> None:
+        """Persist the assistant response to history after successful
+        delivery. The caller joins whatever was actually sent to TTS."""
+        self._finalize(text)
 
     def reset(self) -> None:
         self.messages = [{"role": "system", "content": self.cfg["system_prompt"]}]

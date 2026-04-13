@@ -389,6 +389,8 @@ async def process_utterances(config: dict, manager: DeviceManager, utterance_que
                                  volume=0, fade=0)
 
             response_text = " ".join(full_response)
+            if response_text:
+                device.conversation.commit(response_text)
             device.last_response = response_text
             elapsed = time.monotonic() - turn_t0
             ttfs = f"{first_sentence_at - turn_t0:.2f}s" if first_sentence_at else "—"
