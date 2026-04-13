@@ -1,4 +1,4 @@
-# Onju Voice v2 (OnjuClaw 🍐🦞 ?)
+# Onju Voice v2 (OnjuClaw) 🍐🦞
 
 Enable multiple "Google Home" speakers to connect to your Mac Mini for talking to your agent(s).
 
