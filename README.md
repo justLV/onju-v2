@@ -4,7 +4,7 @@ Enable multiple "Google Home" speakers to connect to your Mac Mini for talking t
 
 This repo consists of:
 * An async server pipeline handling ASR -> TTS from multiple devices using any LLM or agent platforms like OpenClaw 🦞
-* Hardware designs for a drop-in replacement PCB to the original Google Nest Mini (2nd gen), using the ESP32-S3 for audio processing and WiFi connectivity
+* Hardware designs for a drop-in replacement PCB to the original Google Nest Mini (2nd gen), using the ESP32-S3 for audio processing and WiFi connectivity ([order link](https://www.pcbway.com/project/shareproject/Onju_Voice_d33625a1.html))
 
 > This is an upgraded version of [onju-voice](https://github.com/justLV/onju-voice) as DEMO'd [here](https://x.com/justLV/status/1681377298308820992?s=20)!.
 
