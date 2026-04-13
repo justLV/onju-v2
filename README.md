@@ -151,7 +151,7 @@ ollama run gemma4:e4b
 # Cloud -- just set base_url and api_key in config.yaml (default: Haiku via OpenRouter)
 ```
 
-**TTS** -- [ElevenLabs](https://elevenlabs.io) is the default (set your API key in config.yaml). For fully offline TTS, you can use [mlx-audio](https://github.com/lucasnewman/mlx-audio) (`uv pip install -e ".[tts-local]"`, then set `tts.backend: "qwen3"` for example in config.yaml - I don't think this is the best quality, just including as reference for a local TTS!).
+**TTS** -- [ElevenLabs](https://elevenlabs.io) is the default (set your API key in config.yaml). For fully offline TTS, you can use [mlx-audio](https://github.com/lucasnewman/mlx-audio) (`uv pip install -e ".[tts-local]"`, then set `tts.backend: "local"` in config.yaml - I don't think this is the best quality, just including as reference for a local TTS!).
 
 **Run:**
 ```bash
@@ -211,7 +211,7 @@ See [`pipeline/config.yaml.example`](pipeline/config.yaml.example) for all optio
 | `conversation.conversational` | LLM endpoint, model, system prompt, message history |
 | `conversation.agentic` | OpenClaw gateway URL, auth token, message channel |
 | `conversation.stall` | Fast classifier that decides if the agentic backend needs a brief spoken stall |
-| `tts` | TTS backend (`"elevenlabs"` or `"qwen3"`), voice settings |
+| `tts` | TTS backend (`"elevenlabs"` or `"local"`), voice settings |
 | `vad` | Voice activity detection thresholds and timing |
 | `network` | UDP/TCP/multicast ports |
 | `device` | Volume, mic timeout, LED settings, greeting audio |
@@ -248,7 +248,7 @@ python tests/test_stream.py
 python tests/test_stream.py "your prompt here"
 
 # Serial monitor (auto-detects USB port)
-python serial_monitor.py test.wav
+python serial_monitor.py
 ```
 
 ## UART debug commands

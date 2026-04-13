@@ -183,8 +183,13 @@ async def multicast_listener(config: dict, manager: DeviceManager):
 
     while True:
         data, addr = await loop.sock_recvfrom(sock, 1024)
-        msg = data.decode("utf-8")
-        parts = msg.split()
+        try:
+            parts = data.decode("utf-8").split()
+        except UnicodeDecodeError:
+            log.debug(f"MCAST  ignored non-UTF8 packet from {addr[0]}")
+            continue
+        if not parts:
+            continue
         hostname = parts[0]
         ptt = "PTT" in (p.upper() for p in parts)
         log.info(f"DEVICE  {hostname} ({addr[0]}) {'PTT' if ptt else 'VOX'}")

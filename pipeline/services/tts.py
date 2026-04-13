@@ -13,8 +13,8 @@ async def synthesize(text: str, voice: str, config: dict) -> bytes:
     backend = config["tts"]["backend"]
     if backend == "elevenlabs":
         return await _elevenlabs(text, voice, config)
-    if backend == "qwen3":
-        return await _qwen3(text, config)
+    if backend == "local":
+        return await _local(text, config)
     raise ValueError(f"Unknown TTS backend: {backend}")
 
 
@@ -41,21 +41,21 @@ async def _elevenlabs(text: str, voice_name: str, config: dict) -> bytes:
     return audio.raw_data
 
 
-async def _qwen3(text: str, config: dict) -> bytes:
-    q_cfg = config["tts"]["qwen3"]
-    url = q_cfg["url"].rstrip("/") + "/v1/audio/speech"
+async def _local(text: str, config: dict) -> bytes:
+    local_cfg = config["tts"]["local"]
+    url = local_cfg["url"].rstrip("/") + "/v1/audio/speech"
 
     payload = {
-        "model": q_cfg["model"],
+        "model": local_cfg["model"],
         "input": text,
         "response_format": "wav",
     }
 
     # Voice cloning: pass ref_audio path (server reads from disk)
-    ref_audio = q_cfg.get("ref_audio")
+    ref_audio = local_cfg.get("ref_audio")
     if ref_audio:
         payload["ref_audio"] = os.path.abspath(ref_audio)
-    ref_text = q_cfg.get("ref_text")
+    ref_text = local_cfg.get("ref_text")
     if ref_text:
         payload["ref_text"] = ref_text
 
@@ -66,5 +66,5 @@ async def _qwen3(text: str, config: dict) -> bytes:
 
     audio = AudioSegment.from_wav(io.BytesIO(wav_bytes))
     audio = audio.set_channels(1).set_frame_rate(16000).set_sample_width(2)
-    log.debug(f"TTS qwen3: {len(text)} chars -> {len(audio)}ms audio")
+    log.debug(f"TTS local: {len(text)} chars -> {len(audio)}ms audio")
     return audio.raw_data
