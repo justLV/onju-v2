@@ -1,10 +1,13 @@
 """
-Quick benchmark of the stall classifier against Gemini to see:
-- How long each call actually takes
-- Whether the model returns NONE or a stall phrase as expected
-- Whether we're blowing past the 1.5s timeout
+Run the stall classifier over a set of labeled utterances and print the
+results grouped by expected category, for manual review.
 
-Run: python test_stall.py
+Each case carries a label (NONE / LOOKUP / ACTION) describing what we
+expect the classifier to do, but there's no automated pass/fail — you
+read the outputs yourself. Latency is printed per case and summarized at
+the end against the production timeout.
+
+Run: python tests/test_stall.py
 """
 import asyncio
 import os
@@ -15,72 +18,105 @@ import yaml
 from pipeline.conversation import stall as stall_mod
 
 
-# Each entry is (user_text, prev_user, prev_assistant).
-# prev_user / prev_assistant can be None for fresh-start queries.
-TEST_QUERIES: list[tuple[str, str | None, str | None]] = [
-    # --- No context (fresh start) ---
-    # Conversational (should be NONE)
-    ("How are you doing today?", None, None),
-    ("What's two plus two?", None, None),
-    ("What's your favorite color?", None, None),
-    ("Tell me a joke.", None, None),
-    # Fetch / lookup (should stall)
-    ("What's the weather like in Berlin right now?", None, None),
-    ("Can you look up the latest news on space launches and summarize it?", None, None),
-    ("Find me a good ramen spot nearby.", None, None),
-    ("Can you search for what people are saying about the new camera release?", None, None),
-    ("What time is it in Tokyo?", None, None),
-    # Capture / act / schedule — should NOT stall (stall can't make these promises)
-    ("Remember that my next meeting is Tuesday at noon.", None, None),
-    ("Add bread and butter to my shopping list.", None, None),
-    ("Save this as a note: the door code is one-two-three-four.", None, None),
-    ("Remind me to water the plants tomorrow.", None, None),
-    ("Schedule a dentist appointment for next Wednesday.", None, None),
-    ("Send a message to the team saying I'm running late.", None, None),
-    ("Mark the laundry task as done on my todo list.", None, None),
-    # Mixed — lookup component should dominate
-    ("Can you find flower delivery options near the office?", None, None),
+# (label, user_text, prev_user, prev_assistant)
+# label describes what kind of stall (if any) we'd expect for this turn.
+# prev_user / prev_assistant are None for fresh-start queries.
+TEST_QUERIES: list[tuple[str, str, str | None, str | None]] = [
+    # --- Conversational → NONE ---
+    ("NONE", "How are you doing today?", None, None),
+    ("NONE", "What's two plus two?", None, None),
+    ("NONE", "What's your favorite color?", None, None),
+    ("NONE", "Tell me a joke.", None, None),
+    ("NONE", "Why is the sky blue?", None, None),
 
-    # --- With context (should recognize follow-ups / prefaces) ---
-    # Pure continuations — NONE
+    # --- Retrieval → LOOKUP stall ---
+    ("LOOKUP", "What's the weather like in Berlin right now?", None, None),
+    ("LOOKUP", "Can you look up the latest news on space launches and summarize it?", None, None),
+    ("LOOKUP", "Find me a good ramen spot nearby.", None, None),
+    ("LOOKUP", "Can you search for what people are saying about the new camera release?", None, None),
+    ("LOOKUP", "What's the current Bitcoin price?", None, None),
+    ("LOOKUP", "Can you find flower delivery options near the office?", None, None),
+
+    # --- Action / capture → ACTION stall (listener sound, no commitment) ---
+    ("ACTION", "Remember that my next meeting is Tuesday at noon.", None, None),
+    ("ACTION", "Add bread and butter to my shopping list.", None, None),
+    ("ACTION", "Save this as a note: the door code is one-two-three-four.", None, None),
+    ("ACTION", "Remind me to water the plants tomorrow.", None, None),
+    ("ACTION", "Schedule a dentist appointment for next Wednesday.", None, None),
+    ("ACTION", "Send a message to the team saying I'm running late.", None, None),
+    ("ACTION", "Mark the laundry task as done on my todo list.", None, None),
+
+    # The briefing case that originally slipped through as NONE (action + lookup)
     (
-        "Go on.",
+        "ACTION",
+        "Can you set up a briefing tomorrow for 9 a.m.? Actually, make that every "
+        "day. And the briefing should search X for any AI news you think I'd find "
+        "interesting.",
+        None,
+        None,
+    ),
+
+    # --- Context-aware: continuations → NONE ---
+    (
+        "NONE", "Go on.",
         "What's the weather in Berlin right now?",
         "Berlin is about fifty degrees, partly cloudy, light wind from the west.",
     ),
     (
-        "Um, one more thing.",
+        "NONE", "Um, one more thing.",
         "What's the weather in Berlin right now?",
         "Berlin is about fifty degrees, partly cloudy.",
     ),
     (
-        "Tell me more.",
+        "NONE", "Tell me more.",
         "What's the latest on space launches?",
         "A private company successfully landed a booster on a floating platform yesterday.",
     ),
-    # Shorthand follow-ups that DO need a new lookup — should stall
+
+    # --- Context-aware: parameter-shift follow-ups → LOOKUP ---
     (
-        "What about Saturday?",
+        "LOOKUP", "What about Saturday?",
         "What's the weather in Berlin on Friday?",
         "Friday is partly sunny, mid fifties.",
     ),
     (
-        "Same but for Tuesday.",
-        "What's on my calendar Monday?",
-        "Monday is open until 3pm, then a one-hour block.",
+        "LOOKUP", "And on Netflix?",
+        "What's new on Hulu this week?",
+        "A couple of new episodes of The Bear and a reality show premiere.",
     ),
     (
-        "What about the other one?",
+        "LOOKUP", "What about the other one?",
         "How much is the blue jacket on that store page?",
         "The blue jacket is on sale for sixty nine dollars.",
     ),
-    # Preface with a real request mixed in — should follow request
+
+    # --- Context-aware: preface + action request → ACTION ---
     (
-        "By the way, can you also remind me to water the plants?",
+        "ACTION", "By the way, can you also remind me to water the plants?",
         "What's the weather in Berlin right now?",
         "About fifty degrees, partly cloudy.",
     ),
 ]
+
+
+GREY = "\033[90m"
+CYAN = "\033[36m"
+YELLOW = "\033[33m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+async def run_one(query, prev_user, prev_assistant, config):
+    t0 = time.monotonic()
+    try:
+        result = await stall_mod.decide_stall(
+            query, config, prev_user=prev_user, prev_assistant=prev_assistant
+        )
+        err = None
+    except Exception as e:
+        result = None
+        err = str(e)
+    return time.monotonic() - t0, result, err
 
 
 async def main():
@@ -91,27 +127,41 @@ async def main():
     with open(cfg_path) as f:
         config = yaml.safe_load(f)
 
-    # Force the timeout off so we see true latency
     original_timeout = config["conversation"]["stall"].get("timeout", 1.5)
     config["conversation"]["stall"]["timeout"] = 30.0
+    # Force agentic mode so decide_stall runs even if config is set to conversational.
+    config["conversation"]["backend"] = "agentic"
 
-    print(f"model:    {config['conversation']['stall']['model']}")
-    print(f"endpoint: {config['conversation']['stall']['base_url']}")
-    print(f"(original timeout was {original_timeout}s — disabled for this test)\n")
+    print(f"{BOLD}model:{RESET}    {config['conversation']['stall']['model']}")
+    print(f"{BOLD}endpoint:{RESET} {config['conversation']['stall']['base_url']}")
+    print(f"{GREY}(production timeout is {original_timeout}s — disabled here){RESET}\n")
 
-    for query, prev_user, prev_assistant in TEST_QUERIES:
-        t0 = time.monotonic()
-        try:
-            result = await stall_mod.decide_stall(
-                query, config, prev_user=prev_user, prev_assistant=prev_assistant
-            )
-        except Exception as e:
-            result = f"ERROR: {e}"
-        elapsed = time.monotonic() - t0
-        flag = " TIMEOUT" if elapsed > original_timeout else ""
-        ctx = " (has context)" if prev_user else ""
-        print(f"[{elapsed:5.2f}s]{flag}  {query!r}{ctx}")
-        print(f"          -> {result!r}\n")
+    results: dict[str, list[tuple[float, str, str | None, str | None, str | None]]] = {
+        "NONE": [], "LOOKUP": [], "ACTION": [],
+    }
+    slow = 0
+    errors = 0
+
+    for label, query, prev_user, prev_assistant in TEST_QUERIES:
+        elapsed, result, err = await run_one(query, prev_user, prev_assistant, config)
+        if err:
+            errors += 1
+        if elapsed > original_timeout:
+            slow += 1
+        results[label].append((elapsed, query, prev_user, result, err))
+
+    for label in ("NONE", "LOOKUP", "ACTION"):
+        print(f"{BOLD}{CYAN}── {label} ──{RESET}")
+        for elapsed, query, prev_user, result, err in results[label]:
+            slow_tag = f" {YELLOW}SLOW{RESET}" if elapsed > original_timeout else ""
+            ctx = f" {GREY}(w/ context){RESET}" if prev_user else ""
+            display = err if err else repr(result)
+            print(f"  [{elapsed:4.2f}s]{slow_tag}  {query}{ctx}")
+            print(f"           → {display}")
+        print()
+
+    total = sum(len(v) for v in results.values())
+    print(f"{GREY}{total} cases  |  {slow} over {original_timeout}s  |  {errors} errors{RESET}")
 
 
 if __name__ == "__main__":
